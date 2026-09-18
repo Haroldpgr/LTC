@@ -311,6 +311,7 @@ fn extract_mc_token(v: &serde_json::Value) -> Option<String> {
 /// fallback al clásico (/authentication/login_with_xbox).
 async fn minecraft_login(uhs: &str, xsts_token: &str) -> Result<(String, String, String, Option<String>), String> {
     let xtoken = format!("XBL3.0 x={};{}", uhs, xsts_token);
+    let mut first_err = String::new();
     let mut last_err = String::new();
     let mut mc_token: Option<String> = None;
 
@@ -331,15 +332,16 @@ async fn minecraft_login(uhs: &str, xsts_token: &str) -> Result<(String, String,
                     mc_token = extract_mc_token(&v);
                 }
                 if mc_token.is_none() {
-                    last_err = "Respuesta sin access_token en /launcher/login".to_string();
+                    first_err = "Respuesta sin access_token en /launcher/login".to_string();
                 }
             } else {
+                let status = resp.status();
                 let body = resp.text().await.unwrap_or_default();
-                last_err = body.chars().take(300).collect::<String>();
+                first_err = format!("HTTP {}: {}", status, body.chars().take(300).collect::<String>());
             }
         }
         Err(e) => {
-            last_err = format!("Error con Minecraft Services: {}", e);
+            first_err = format!("Error con Minecraft Services: {}", e);
         }
     }
 
@@ -362,8 +364,9 @@ async fn minecraft_login(uhs: &str, xsts_token: &str) -> Result<(String, String,
                         last_err = "Respuesta sin access_token en login_with_xbox".to_string();
                     }
                 } else {
+                    let status = resp.status();
                     let body = resp.text().await.unwrap_or_default();
-                    last_err = body.chars().take(300).collect::<String>();
+                    last_err = format!("HTTP {}: {}", status, body.chars().take(300).collect::<String>());
                 }
             }
             Err(e) => {
@@ -375,13 +378,14 @@ async fn minecraft_login(uhs: &str, xsts_token: &str) -> Result<(String, String,
     let mc_token = match mc_token {
         Some(t) => t,
         None => {
-            if last_err.contains("NOT_FOUND")
-                || last_err.contains("No Minecraft account")
-                || last_err.contains("does not own")
+            let combined = format!("{} || {}", first_err, last_err);
+            if combined.contains("NOT_FOUND")
+                || combined.contains("No Minecraft account")
+                || combined.contains("does not own")
             {
                 return Err("Esta cuenta Microsoft no tiene Minecraft: Java Edition comprado o vinculado.".to_string());
             }
-            let detail: String = last_err.chars().take(500).collect();
+            let detail: String = combined.chars().take(600).collect();
             return Err(format!("Minecraft Services rechazó el login: {}", detail));
         }
     };
