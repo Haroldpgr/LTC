@@ -35,6 +35,16 @@ fn ms_http() -> reqwest::Client {
         .unwrap_or_else(|_| reqwest::Client::new())
 }
 
+/// Cliente para api.minecraftservices.com con UA neutra: el WAF de Mojang
+/// responde 403 a algunos User-Agent personalizados en ambas rutas de login.
+fn mojang_http() -> reqwest::Client {
+    reqwest::Client::builder()
+        .user_agent("Mozilla/5.0")
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new())
+}
+
 /// Espera el callback OAuth en http://localhost:1653/?code=... y devuelve el code.
 async fn wait_for_ms_code() -> Result<String, String> {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:1653")
@@ -316,7 +326,7 @@ async fn minecraft_login(uhs: &str, xsts_token: &str) -> Result<(String, String,
     let mut mc_token: Option<String> = None;
 
     // Intento 1: endpoint de launchers (PC_LAUNCHER)
-    match ms_http()
+    match mojang_http()
         .post("https://api.minecraftservices.com/launcher/login")
         .header("Accept", "application/json")
         .json(&serde_json::json!({
@@ -348,7 +358,7 @@ async fn minecraft_login(uhs: &str, xsts_token: &str) -> Result<(String, String,
     // Intento 2 (fallback): endpoint clásico
     if mc_token.is_none() {
         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-        match ms_http()
+        match mojang_http()
             .post("https://api.minecraftservices.com/authentication/login_with_xbox")
             .header("Accept", "application/json")
             .json(&serde_json::json!({ "identityToken": xtoken }))
@@ -391,7 +401,7 @@ async fn minecraft_login(uhs: &str, xsts_token: &str) -> Result<(String, String,
     };
     let tok = mc_token;
 
-    let profile_resp = ms_http()
+    let profile_resp = mojang_http()
         .get("https://api.minecraftservices.com/minecraft/profile")
         .bearer_auth(&tok)
         .send()

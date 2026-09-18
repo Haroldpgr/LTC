@@ -18,7 +18,7 @@ export default function App() {
   const [showSplash, setShowSplash] = useState(true);
 
   useEffect(() => {
-    const t = setTimeout(() => setShowSplash(false), 3900);
+    const t = setTimeout(() => setShowSplash(false), 6000);
     return () => clearTimeout(t);
   }, []);
 
