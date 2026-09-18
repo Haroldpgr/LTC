@@ -483,15 +483,18 @@ async fn install_forge(
         use std::io::{BufRead, BufReader};
         use std::process::{Command, Stdio};
 
-        let mut child = Command::new(&java_exe)
-            .arg("-jar")
-            .arg(&installer_arg)
-            .arg("--installClient")
-            .arg(&game_dir)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|e| format!("No se pudo ejecutar el instalador de Forge: {}", e))?;
+        let mut child = {
+            let mut cmd = Command::new(&java_exe);
+            cmd.arg("-jar")
+                .arg(&installer_arg)
+                .arg("--installClient")
+                .arg(&game_dir)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
+            crate::minecraft::launcher::Launcher::hide_console(&mut cmd);
+            cmd.spawn()
+                .map_err(|e| format!("No se pudo ejecutar el instalador de Forge: {}", e))?
+        };
 
         // Reenviar progreso del instalador a la interfaz
         let mut tail: Vec<String> = Vec::new();

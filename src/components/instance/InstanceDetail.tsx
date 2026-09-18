@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
   ArrowLeft, Play, Download, Server, Cpu, Package, ToggleLeft, ToggleRight,
   Trash2, Plus, Store, FileText, AlertTriangle, CheckCircle, Terminal,
-  HardDrive, Layers, Sparkles, Folder, Sun, RefreshCw,
+  HardDrive, Layers, Sparkles, Folder, Sun, RefreshCw, Link2, CloudDownload,
 } from 'lucide-react';
 import { useInstanceStore } from '@/stores/instanceStore';
 import { open } from '@tauri-apps/plugin-dialog';
@@ -13,7 +13,7 @@ type DetailTab = 'overview' | 'mods' | 'logs' | 'resources' | 'shaders';
 
 export function InstanceDetail() {
   const [detailTab, setDetailTab] = useState<DetailTab>('overview');
-  const { selectedInstance, selectInstance, play, installInstance, launcherState, addModToLocal, removeMod, toggleMod, runningInstanceId, setActiveTab, updateInstance, resolveModIcons } = useInstanceStore();
+  const { selectedInstance, selectInstance, play, installInstance, launcherState, addModToLocal, removeMod, toggleMod, runningInstanceId, setActiveTab, updateInstance, resolveModIcons, setModsSourceUrl, clearModsSource, syncModsSource } = useInstanceStore();
 
   if (!selectedInstance) return null;
 
@@ -47,6 +47,52 @@ export function InstanceDetail() {
 
   const [resolvingIcons, setResolvingIcons] = useState(false);
   const [iconsMsg, setIconsMsg] = useState('');
+
+  const [modsUrl, setModsUrl] = useState(instance.modsSource?.archiveUrl ?? '');
+  const [modsMsg, setModsMsg] = useState('');
+  const [syncingMods, setSyncingMods] = useState(false);
+  const activeModsSource = instance.modsSource && instance.modsSource.type !== 'none'
+    ? instance.modsSource
+    : null;
+
+  const handleSaveModsUrl = async () => {
+    setModsMsg('');
+    const url = modsUrl.trim();
+    if (!url) {
+      setModsMsg('Pega primero el enlace del pack de mods.');
+      return;
+    }
+    try {
+      await setModsSourceUrl(instance.id, url);
+      setModsMsg('Fuente guardada. Al darle a Jugar se sincronizará sola.');
+    } catch (e) {
+      setModsMsg(String(e));
+    }
+  };
+
+  const handleSyncModsNow = async () => {
+    setModsMsg('');
+    setSyncingMods(true);
+    try {
+      const changed = await syncModsSource(instance.id);
+      setModsMsg(changed ? 'Mods sincronizados con el pack del servidor.' : 'Ya estabas al día, sin cambios.');
+    } catch (e) {
+      setModsMsg(String(e));
+    } finally {
+      setSyncingMods(false);
+    }
+  };
+
+  const handleClearModsSource = async () => {
+    setModsMsg('');
+    try {
+      await clearModsSource(instance.id);
+      setModsUrl('');
+      setModsMsg('Fuente eliminada. Tus mods actuales se conservan.');
+    } catch (e) {
+      setModsMsg(String(e));
+    }
+  };
 
   const handleResolveIcons = async () => {
     setResolvingIcons(true);
@@ -358,6 +404,82 @@ export function InstanceDetail() {
                     {ramSaved ? '¡RAM Guardada!' : 'Guardar Memoria RAM'}
                   </motion.button>
                 </div>
+              </motion.div>
+
+              {/* Fuente de mods del servidor */}
+              <motion.div
+                initial={{ opacity: 0, y: 15 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.25 }}
+                className="glass-card p-6 relative overflow-hidden"
+              >
+                <div className="flex items-center gap-2.5 mb-1">
+                  <div className="w-8 h-8 rounded-lg bg-accent-500/20 text-accent-400 flex items-center justify-center">
+                    <CloudDownload size={16} />
+                  </div>
+                  <div>
+                    <h4 className="font-bold text-white text-sm">Mods del servidor</h4>
+                    <p className="text-xs text-dark-400">
+                      Pega el enlace del pack y al darle a Jugar se te ponen solos los mods nuevos, se borran los quitados y se actualizan los cambiados.
+                    </p>
+                  </div>
+                </div>
+
+                {activeModsSource?.type === 'archive' && activeModsSource.archiveUrl && (
+                  <div className="mt-3 px-3 py-2 rounded-xl bg-accent-500/10 border border-accent-500/20 flex items-center gap-2">
+                    <Link2 size={13} className="text-accent-400 shrink-0" />
+                    <p className="text-[11px] text-accent-200 font-mono truncate flex-1">{activeModsSource.archiveUrl}</p>
+                    {activeModsSource.syncedAt && (
+                      <span className="text-[10px] text-dark-400 shrink-0">
+                        Sinc: {new Date(activeModsSource.syncedAt).toLocaleDateString()}
+                      </span>
+                    )}
+                  </div>
+                )}
+
+                <div className="flex flex-col md:flex-row gap-2 mt-3">
+                  <input
+                    type="text"
+                    value={modsUrl}
+                    onChange={(e) => setModsUrl(e.target.value)}
+                    placeholder="https://github.com/.../releases/download/.../mods.zip"
+                    className="input-field text-xs font-mono flex-1"
+                  />
+                  <div className="flex gap-2 shrink-0">
+                    <motion.button
+                      whileHover={{ scale: 1.02 }}
+                      whileTap={{ scale: 0.98 }}
+                      onClick={handleSaveModsUrl}
+                      className="btn-primary text-xs py-2 px-4"
+                    >
+                      Guardar
+                    </motion.button>
+                    {activeModsSource && (
+                      <>
+                        <motion.button
+                          whileHover={{ scale: 1.02 }}
+                          whileTap={{ scale: 0.98 }}
+                          onClick={handleSyncModsNow}
+                          disabled={syncingMods}
+                          className="btn-secondary text-xs py-2 px-4 flex items-center gap-1.5 disabled:opacity-50"
+                        >
+                          <RefreshCw size={13} className={syncingMods ? 'animate-spin' : ''} />
+                          {syncingMods ? 'Sincronizando...' : 'Sincronizar'}
+                        </motion.button>
+                        <motion.button
+                          whileHover={{ scale: 1.02 }}
+                          whileTap={{ scale: 0.98 }}
+                          onClick={handleClearModsSource}
+                          className="btn-ghost text-xs py-2 px-3"
+                          title="Quitar fuente (conserva tus mods actuales)"
+                        >
+                          <Trash2 size={13} />
+                        </motion.button>
+                      </>
+                    )}
+                  </div>
+                </div>
+                {modsMsg && <p className="text-xs text-primary-300 mt-2">{modsMsg}</p>}
               </motion.div>
             </motion.div>
           )}

@@ -3,7 +3,7 @@ use super::manifest::VersionInfo;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::path::PathBuf;
-use std::process::Command;
+use std::process::{Command, Stdio};
 use tauri::AppHandle;
 use uuid::Uuid;
 
@@ -140,6 +140,19 @@ impl InstanceConfig {
 pub struct Launcher;
 
 impl Launcher {
+    /// En Windows evita que los procesos hijo (java.exe es app de consola)
+    /// abran una ventana de CMD visible. Sin esto, al darle a Jugar aparece
+    /// una consola negra junto al juego.
+    #[cfg(target_os = "windows")]
+    pub fn hide_console(cmd: &mut Command) {
+        use std::os::windows::process::CommandExt;
+        // CREATE_NO_WINDOW = 0x08000000
+        cmd.creation_flags(0x08000000);
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    pub fn hide_console(_cmd: &mut Command) {}
+
     pub fn find_java(java_version: i32) -> Option<PathBuf> {
         let common_paths = vec![
             format!("C:\\Program Files\\Java\\jdk-{}\\bin\\java.exe", java_version),
@@ -163,7 +176,12 @@ impl Launcher {
         }
 
         // Try system java
-        if let Ok(output) = Command::new("java").arg("-version").output() {
+        if let Ok(output) = {
+            let mut probe = Command::new("java");
+            probe.arg("-version");
+            Self::hide_console(&mut probe);
+            probe.output()
+        } {
             if output.status.success() {
                 return Some(PathBuf::from("java"));
             }
@@ -250,8 +268,10 @@ impl Launcher {
     }
 
     fn java_runs(java_exe: &PathBuf) -> bool {
-        Command::new(java_exe)
-            .arg("-version")
+        let mut probe = Command::new(java_exe);
+        probe.arg("-version");
+        Self::hide_console(&mut probe);
+        probe
             .output()
             .map(|o| o.status.success())
             .unwrap_or(false)
@@ -421,6 +441,12 @@ impl Launcher {
 
         let mut cmd = Command::new(java_path);
         cmd.args(&args).current_dir(instance_dir);
+        // Sin ventana de consola y sin heredar stdio: el juego escribe sus
+        // propios logs en la instancia y así el arranque es limpio y fluido.
+        Self::hide_console(&mut cmd);
+        cmd.stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
         cmd
     }
 

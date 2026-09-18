@@ -1,6 +1,6 @@
 [package]
 name = "ltc-launcher"
-version = "1.0.0"
+version = "1.0.1"
 description = "LTC Minecraft Launcher"
 authors = ["LTC Team"]
 edition = "2021"

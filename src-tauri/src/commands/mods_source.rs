@@ -207,13 +207,15 @@ fn extract_rar(rar_path: &Path, staging: &Path) -> Result<(), String> {
         "No se encontró 7-Zip ni WinRAR para extraer el .rar. Instala 7-Zip o usa un .zip.".to_string(),
     )?;
     let out_arg = format!("-o{}", staging.to_string_lossy());
-    let status = std::process::Command::new(&exe)
-        .arg("x")
+    let mut cmd = std::process::Command::new(&exe);
+    cmd.arg("x")
         .arg("-y")
         .arg("-bso0")
         .arg("-bsp0")
         .arg(&out_arg)
-        .arg(rar_path)
+        .arg(rar_path);
+    Launcher::hide_console(&mut cmd);
+    let status = cmd
         .status()
         .map_err(|e| format!("No se pudo ejecutar {}: {}", exe.to_string_lossy(), e))?;
     if !status.success() {
@@ -293,7 +295,9 @@ async fn resolve_url_archive(
     let cache = inst_dir.join("mods_source_cache");
     let url = source.archive_url.clone();
 
-    if cache.exists() && !source.remote_meta.is_empty() {
+    // Vía rápida: si el servidor informa ETag/fecha/tamaño y no cambió,
+    // se reutiliza la caché sin descargar nada.
+    if cache.is_file() && !source.remote_meta.is_empty() {
         if let Some(meta) = head_meta(&url).await {
             if meta == source.remote_meta {
                 return Ok(cache);
@@ -301,7 +305,20 @@ async fn resolve_url_archive(
         }
     }
 
-    download_url(&url, &cache).await?;
+    // Descargar a temporal y comparar por hash: si el pack no cambió
+    // (hostings sin HEAD, ETag inestable, etc.) no se toca nada y el
+    // arranque sigue siendo rápido y sin borrar mods.
+    let tmp = inst_dir.join("mods_source_cache.tmp");
+    download_url(&url, &tmp).await?;
+    let new_hash = Launcher::hash_file(&tmp)?;
+    if cache.is_file() && new_hash == source.fingerprint {
+        let _ = std::fs::remove_file(&tmp);
+        return Ok(cache);
+    }
+    if tmp != cache {
+        let _ = std::fs::remove_file(&cache);
+        std::fs::rename(&tmp, &cache).map_err(|e| e.to_string())?;
+    }
     if let Some(meta) = head_meta(&url).await {
         if let Some(mut src) = config.mods_source.take() {
             src.remote_meta = meta;
