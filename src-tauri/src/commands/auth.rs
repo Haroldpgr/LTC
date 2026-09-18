@@ -301,7 +301,70 @@ async fn xbox_login(ms_access_token: &str) -> Result<(String, String, Option<Str
         }
         gtg = x.gtg.clone();
     }
+    // Gamertag real desde el perfil de Xbox (segunda fuente, no falla el login).
+    // Se usa el token de usuario XBL como padre, como indica el flujo Xbox.
+    if gtg.is_none() {
+        if let Ok(profile_gtg) = xbox_gamertag(&uhs, &xbl.token).await {
+            gtg = profile_gtg;
+        }
+    }
     Ok((uhs, token, gtg))
+}
+
+/// Obtiene el gamertag real del perfil de Xbox. Solo diagnóstico: nunca falla el login.
+async fn xbox_gamertag(uhs: &str, parent_token: &str) -> Result<Option<String>, String> {
+    let profile_token = {
+        let xsts: XstsResponse = ms_http()
+            .post("https://xsts.auth.xboxlive.com/xsts/authorize")
+            .header("x-xbl-contract-version", "1")
+            .json(&serde_json::json!({
+                "Properties": {
+                    "SandboxId": "RETAIL",
+                    "UserTokens": [parent_token],
+                },
+                "RelyingParty": "http://profile.xboxlive.com",
+                "TokenType": "JWT",
+            }))
+            .send()
+            .await
+            .map_err(|e| format!("Error con XSTS (perfil): {}", e))?
+            .json()
+            .await
+            .map_err(|e| format!("Respuesta inválida de XSTS (perfil): {}", e))?;
+        // OJO: aquí se pide un token con la *cadena* XSTS como UserToken (es lo que
+        // pide profile.xboxlive.com); si falla, simplemente no hay gamertag.
+        xsts.token.ok_or("XSTS (perfil) no devolvió token.".to_string())?
+    };
+    let resp = ms_http()
+        .get("https://profile.xboxlive.com/users/me/profile/settings?settings=Gamertag")
+        .header("Authorization", format!("XBL3.0 x={};{}", uhs, profile_token))
+        .header("x-xbl-contract-version", "1")
+        .header("Accept", "application/json")
+        .send()
+        .await
+        .map_err(|e| format!("Error con perfil Xbox: {}", e))?;
+    if !resp.status().is_success() {
+        return Ok(None);
+    }
+    let v: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("Perfil Xbox inválido: {}", e))?;
+    let gtg = v
+        .get("profileUsers")
+        .and_then(|u| u.as_array())
+        .and_then(|a| a.first())
+        .and_then(|u| u.get("settings"))
+        .and_then(|s| s.as_array())
+        .and_then(|a| {
+            a.iter().find(|s| {
+                s.get("id").and_then(|i| i.as_str()) == Some("Gamertag")
+            })
+        })
+        .and_then(|s| s.get("value"))
+        .and_then(|x| x.as_str())
+        .map(|s| s.to_string());
+    Ok(gtg)
 }
 
 #[derive(Debug, Deserialize)]
@@ -510,15 +573,19 @@ async fn minecraft_login(
     let mc_token = match mc_token {
         Some(t) => t,
         None => {
+            let who = gamertag
+                .filter(|g| !g.is_empty())
+                .map(|g| format!(" (identidad Xbox: {})", g))
+                .unwrap_or_default();
             let combined = format!("{} || {}", first_err, last_err);
             if combined.contains("NOT_FOUND")
                 || combined.contains("No Minecraft account")
                 || combined.contains("does not own")
             {
-                return Err("Esta cuenta Microsoft no tiene Minecraft: Java Edition comprado o vinculado.".to_string());
+                return Err(format!("Esta cuenta Microsoft no tiene Minecraft: Java Edition comprado o vinculado{}.", who));
             }
             let detail: String = combined.chars().take(600).collect();
-            return Err(format!("Minecraft Services rechazó el login: {}", detail));
+            return Err(format!("Minecraft Services rechazó el login{}: {}", who, detail));
         }
     };
     let tok = mc_token;
