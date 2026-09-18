@@ -1,0 +1,2 @@
+[target.'cfg(windows)']
+runner = "powershell -ExecutionPolicy Bypass -File run.ps1"

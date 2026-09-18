@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "Bash(node *)",
+      "Bash(npm *)",
+      "Bash(rustc *)",
+      "Bash(cargo *)",
+      "Bash(where *)",
+      "Bash(invoke-webrequest *)",
+      "Bash(%temp%\\rustup-init.exe *)",
+      "Bash(set *)",
+      "Bash(%path%)",
+      "Bash(dir *)",
+      "Bash(winget *)",
+      "Bash(cd *)",
+      "Bash(npm install)",
+      "Bash(ren *)",
+      "Bash(npx *)"
+    ]
+  },
+  "$version": 4
+}
