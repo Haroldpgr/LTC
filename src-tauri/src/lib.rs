@@ -68,6 +68,7 @@ pub fn run() {
             mods_source::set_mods_source_folder,
             mods_source::set_mods_source_archive,
             mods_source::set_mods_source_url,
+            mods_source::get_default_mods_url,
             mods_source::clear_mods_source,
             mods_source::sync_mods_source_now,
             curseforge::search_modrinth,

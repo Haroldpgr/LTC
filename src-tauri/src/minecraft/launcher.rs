@@ -139,6 +139,12 @@ impl InstanceConfig {
 
 pub struct Launcher;
 
+/// Pack oficial de mods del servidor: viene preconfigurado en cada
+/// instancia nueva y se sincroniza solo al darle a Jugar.
+/// El admin lo actualiza subiendo el zip a ese release (tag fijo).
+pub const DEFAULT_MODS_PACK_URL: &str =
+    "https://github.com/Haroldpgr/LTC/releases/download/mods-latest/mods.zip";
+
 impl Launcher {
     /// En Windows evita que los procesos hijo (java.exe es app de consola)
     /// abran una ventana de CMD visible. Sin esto, al darle a Jugar aparece

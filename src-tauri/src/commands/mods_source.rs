@@ -328,7 +328,17 @@ async fn resolve_url_archive(
     Ok(cache)
 }
 
-pub(crate) async fn sync_mods_source_internal(base: &PathBuf, instance_id: &str) -> Result<bool, String> {
+/// Sincroniza los mods con la fuente configurada.
+/// - `strict = true` (botón "Sincronizar"): los errores se devuelven para
+///   mostrarlos en la interfaz.
+/// - `strict = false` (al darle a Jugar): si el pack no se puede descargar
+///   se juega con el último pack conocido o con los mods locales, sin
+///   bloquear el arranque por un fallo de red.
+pub(crate) async fn sync_mods_source_internal(
+    base: &PathBuf,
+    instance_id: &str,
+    strict: bool,
+) -> Result<bool, String> {
     let mut config = InstanceConfig::load(base, instance_id).ok_or("Instancia no encontrada")?;
     let Some(source) = config.mods_source.clone() else {
         return Ok(false);
@@ -340,7 +350,23 @@ pub(crate) async fn sync_mods_source_internal(base: &PathBuf, instance_id: &str)
     let mut archive: Option<PathBuf> = None;
     match source.source_type.as_str() {
         ModsSource::TYPE_ARCHIVE if !source.archive_url.is_empty() => {
-            archive = Some(resolve_url_archive(base, &mut config).await?);
+            match resolve_url_archive(base, &mut config).await {
+                Ok(p) => archive = Some(p),
+                Err(e) => {
+                    let cache =
+                        InstanceConfig::instance_dir(base, &config.id).join("mods_source_cache");
+                    if cache.is_file() {
+                        // Sin red o pack caído: se juega con el último pack conocido.
+                        archive = Some(cache);
+                    } else if strict {
+                        return Err(e);
+                    } else {
+                        // Aún sin ningún pack (primera vez sin conexión):
+                        // se juega con los mods locales sin bloquear.
+                        return Ok(false);
+                    }
+                }
+            }
         }
         ModsSource::TYPE_ARCHIVE => {
             let p = PathBuf::from(&source.archive_path);
@@ -471,6 +497,11 @@ pub fn clear_mods_source(
 }
 
 #[tauri::command]
+pub fn get_default_mods_url() -> String {
+    crate::minecraft::launcher::DEFAULT_MODS_PACK_URL.to_string()
+}
+
+#[tauri::command]
 pub async fn sync_mods_source_now(
     instance_id: String,
     state: State<'_, Mutex<InstanceState>>,
@@ -479,5 +510,5 @@ pub async fn sync_mods_source_now(
         let inst_state = state.lock().map_err(|e| e.to_string())?;
         inst_state.config.instances_dir.clone()
     };
-    sync_mods_source_internal(&base, &instance_id).await
+    sync_mods_source_internal(&base, &instance_id, true).await
 }

@@ -200,7 +200,7 @@ export function AdminPanel() {
     setExportingId(instanceId);
     try {
       const path = await invoke<string>('export_mods_archive', { instanceId });
-      setExportMsg(`Pack exportado: ${path}. Súbelo a tu hosting y comparte el enlace como Fuente de mods.`);
+      setExportMsg(`Pack exportado: ${path}. Súbelo como mods.zip al release de tag mods-latest y les llegará solo a todos al darle a Jugar.`);
     } catch (e) {
       setExportMsg(String(e));
     }
@@ -404,11 +404,10 @@ export function AdminPanel() {
               <div className="glass-card p-5">
                 <h4 className="text-sm font-semibold text-white mb-2">Sincronizar mods con los usuarios</h4>
                 <p className="text-xs text-dark-400 leading-relaxed">
-                  Usa <span className="text-primary-300 font-medium">Publicar</span> en una instancia para exportar sus mods a un zip.
-                  Súbelo gratis a un <span className="font-mono">Release de GitHub</span> y comparte el enlace
-                  (<span className="font-mono">.../releases/download/...zip</span>): cada usuario lo pega como <span className="text-primary-300 font-medium">Fuente de mods</span> en
-                  su instancia y, al darle a Jugar, se le instalan los nuevos, se le borran los eliminados y se actualizan los cambiados,
-                  sin tocar nada más. Todo en tiempo real contra tu enlace, sin servidor propio.
+                  Usa <span className="text-primary-300 font-medium">Publicar</span> en una instancia para exportar sus mods a un zip llamado <span className="font-mono">mods.zip</span>.
+                  Súbelo al release de tag <span className="font-mono">mods-latest</span> de tu repo (créalo una vez; después reemplaza el archivo).
+                  Todas las instancias nuevas ya vienen conectadas a ese pack oficial: al darle a Jugar se les instalan los nuevos, se les borran los eliminados y se actualizan los cambiados, sin pegar ningún enlace.
+                  Importante: sube el zip ANTES de darle a Jugar en tu instancia de autor, o quita su fuente, para no revertir tus cambios sin publicar.
                 </p>
               </div>
             </motion.div>

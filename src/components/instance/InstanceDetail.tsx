@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   ArrowLeft, Play, Download, Server, Cpu, Package, ToggleLeft, ToggleRight,
@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import { useInstanceStore } from '@/stores/instanceStore';
 import { open } from '@tauri-apps/plugin-dialog';
+import { invoke } from '@tauri-apps/api/core';
 import { InstanceIcon } from '@/components/common/InstanceIcon';
 
 type DetailTab = 'overview' | 'mods' | 'logs' | 'resources' | 'shaders';
@@ -51,9 +52,14 @@ export function InstanceDetail() {
   const [modsUrl, setModsUrl] = useState(instance.modsSource?.archiveUrl ?? '');
   const [modsMsg, setModsMsg] = useState('');
   const [syncingMods, setSyncingMods] = useState(false);
+  const [officialModsUrl, setOfficialModsUrl] = useState('');
+  useEffect(() => {
+    invoke<string>('get_default_mods_url').then(setOfficialModsUrl).catch(() => {});
+  }, []);
   const activeModsSource = instance.modsSource && instance.modsSource.type !== 'none'
     ? instance.modsSource
     : null;
+  const isOfficialPack = !!officialModsUrl && activeModsSource?.archiveUrl === officialModsUrl;
 
   const handleSaveModsUrl = async () => {
     setModsMsg('');
@@ -420,12 +426,19 @@ export function InstanceDetail() {
                   <div>
                     <h4 className="font-bold text-white text-sm">Mods del servidor</h4>
                     <p className="text-xs text-dark-400">
-                      Pega el enlace del pack y al darle a Jugar se te ponen solos los mods nuevos, se borran los quitados y se actualizan los cambiados.
+                      {isOfficialPack ? 'Pack oficial conectado: lo que publique el admin se te instala solo al darle a Jugar.' : 'Pega el enlace del pack y al darle a Jugar se te ponen solos los mods nuevos, se borran los quitados y se actualizan los cambiados.'}
                     </p>
                   </div>
                 </div>
 
-                {activeModsSource?.type === 'archive' && activeModsSource.archiveUrl && (
+                {isOfficialPack && (
+                  <div className="mt-3 px-3 py-2 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center gap-2">
+                    <CheckCircle size={13} className="text-emerald-400 shrink-0" />
+                    <p className="text-[11px] text-emerald-200 font-medium">Conectado al pack oficial</p>
+                  </div>
+                )}
+
+                {activeModsSource?.type === 'archive' && activeModsSource.archiveUrl && !isOfficialPack && (
                   <div className="mt-3 px-3 py-2 rounded-xl bg-accent-500/10 border border-accent-500/20 flex items-center gap-2">
                     <Link2 size={13} className="text-accent-400 shrink-0" />
                     <p className="text-[11px] text-accent-200 font-mono truncate flex-1">{activeModsSource.archiveUrl}</p>

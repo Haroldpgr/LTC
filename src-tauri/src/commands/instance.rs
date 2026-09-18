@@ -122,7 +122,15 @@ pub async fn create_instance(
             .map(|m| crate::commands::mods_cmd::ModInfoFrontend::to_internal(&m))
             .collect(),
         is_installed: instance.is_installed,
-        mods_source: None,
+        // Pack oficial preconfigurado: lo que publique el admin les llega
+        // solo a los usuarios al darle a Jugar, sin pegar ningún enlace.
+        mods_source: if crate::minecraft::launcher::DEFAULT_MODS_PACK_URL.is_empty() {
+            None
+        } else {
+            Some(crate::minecraft::launcher::ModsSource::new_url(
+                crate::minecraft::launcher::DEFAULT_MODS_PACK_URL.to_string(),
+            ))
+        },
     };
 
     let instance_dir = InstanceConfig::instance_dir(&state.config.instances_dir, &id);
@@ -316,7 +324,7 @@ pub async fn sync_and_launch(
         let inst_state = state.lock().map_err(|e| e.to_string())?;
         inst_state.config.instances_dir.clone()
     };
-    crate::commands::mods_source::sync_mods_source_internal(&base, &instance_id).await?;
+    crate::commands::mods_source::sync_mods_source_internal(&base, &instance_id, false).await?;
 
     // 1. Sync mods: scan disk vs config
     let (mut config, instance_dir) = {
