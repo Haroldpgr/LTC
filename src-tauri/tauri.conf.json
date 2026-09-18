@@ -30,7 +30,9 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis"],
+    "targets": [
+      "nsis"
+    ],
     "publisher": "LTC Team",
     "shortDescription": "LTC Minecraft Launcher",
     "category": "Game",

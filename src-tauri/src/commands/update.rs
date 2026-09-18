@@ -1,5 +1,6 @@
 use crate::commands::instance::InstanceState;
 use serde::Serialize;
+use std::cmp::Ordering;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Mutex;
@@ -51,6 +52,13 @@ pub async fn start_publish_release(
     if !valid_version(&version) {
         return Err("Versión inválida: usa formato X.Y.Z (ej. 1.0.2).".to_string());
     }
+    // Evita publicar hacia atrás por error (la actual va compilada dentro).
+    if compare_versions(&version, env!("CARGO_PKG_VERSION")) != Ordering::Greater {
+        return Err(format!(
+            "La versión debe ser mayor que la actual ({}).",
+            env!("CARGO_PKG_VERSION")
+        ));
+    }
 
     let has_token = {
         let state_lock = state.lock().map_err(|e| e.to_string())?;
@@ -67,42 +75,65 @@ pub async fn start_publish_release(
         return Err("Falta scripts/publish-release-window.ps1 en el proyecto.".to_string());
     }
 
-    let notes_arg = if notes.trim().is_empty() {
+    let mut notes_arg = if notes.trim().is_empty() {
         format!("Actualización v{}", version)
     } else {
         notes.trim().to_string()
     };
+    // Saneado para viajar como argumento entre cmd/start/powershell:
+    // sin comillas ni saltos de línea (romperían las capas de citado).
+    notes_arg = notes_arg.replace(['"', '\r', '\n'], " ");
 
     // Ventana de consola nueva y separada: sobrevive aunque el launcher
     // se reinicie a mitad del build. Sin pipes (no se puede colgar).
-    let mut cmd = std::process::Command::new("powershell");
-    cmd.args([
-        "-NoProfile",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-File",
-        &ps1.to_string_lossy().to_string(),
-        "-Version",
-        &version,
-        "-Notes",
-        &notes_arg,
-    ]);
-    cmd.current_dir(&root)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
+    // Se intenta escapar del job de `tauri dev` (si lo hubiera) para que
+    // al reiniciar la app no arrastre a esta ventana; si falla, reintento normal.
     #[cfg(target_os = "windows")]
-    {
+    fn spawn_window(ps1: &str, version: &str, notes: &str, root: &PathBuf) -> std::io::Result<()> {
         use std::os::windows::process::CommandExt;
-        // CREATE_NEW_CONSOLE: siempre abre su propia ventana.
-        cmd.creation_flags(0x00000010);
+        let attempt = |flags: u32| {
+            let mut cmd = std::process::Command::new("powershell");
+            cmd.args([
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                ps1,
+                "-Version",
+                version,
+                "-Notes",
+                notes,
+            ]);
+            cmd.current_dir(root)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null());
+            cmd.creation_flags(flags);
+            cmd.spawn().map(|_| ())
+        };
+        // BREAKAWAY_FROM_JOB | DETACHED | NEW_GROUP | NEW_CONSOLE
+        attempt(0x01000000 | 0x00000008 | 0x00000200 | 0x00000010)
+            .or_else(|_| attempt(0x00000010))
     }
 
-    match cmd.spawn() {
+    #[cfg(not(target_os = "windows"))]
+    fn spawn_window(_ps1: &str, _version: &str, _notes: &str, _root: &PathBuf) -> std::io::Result<()> {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "solo Windows",
+        ))
+    }
+
+    match spawn_window(
+        &ps1.to_string_lossy().to_string(),
+        &version,
+        &notes_arg,
+        &root,
+    ) {
         Ok(_) => {
             let _ = app_handle.emit(
                 "release-done",
-                serde_json::json!({ "ok": true, "message": "Se abrió una ventana aparte con el progreso. El launcher puede cerrarse y reabrirse solo: es normal, el trabajo sigue en esa ventana." }),
+                serde_json::json!({ "ok": true, "message": "Ventana de publicación abierta: NO la cierres, ahí sale el progreso. El launcher se reiniciará solo a mitad (es normal) y volverá." }),
             );
             Ok("Ventana de publicación abierta.".to_string())
         }
