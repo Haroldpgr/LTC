@@ -22,15 +22,22 @@ pub struct Account {
 }
 
 // App de Azure del usuario (LTC): flujo Authorization Code + localhost.
-// Diagnóstico: definir la variable de entorno LTC_MS_CLIENT_ID permite probar
-// temporalmente con otro Client ID sin recompilar otro binario.
+// Diagnóstico: LTC_MS_CLIENT_ID y LTC_MS_REDIRECT_URI permiten probar con
+// otro registro sin recompilar.
 fn ms_client_id() -> String {
     std::env::var("LTC_MS_CLIENT_ID")
         .ok()
         .filter(|s| !s.trim().is_empty())
         .unwrap_or_else(|| "116308a7-06ac-4420-b26d-1ee6f933165e".to_string())
 }
-const MS_REDIRECT_URI: &str = "http://localhost:1653";
+
+fn ms_redirect_uri() -> String {
+    std::env::var("LTC_MS_REDIRECT_URI")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| DEFAULT_REDIRECT_URI.to_string())
+}
+const DEFAULT_REDIRECT_URI: &str = "http://localhost:1653";
 const MS_SCOPE: &str = "XboxLive.SignIn XboxLive.offline_access";
 
 fn ms_http() -> reqwest::Client {
@@ -51,11 +58,19 @@ fn mojang_http() -> reqwest::Client {
         .unwrap_or_else(|_| reqwest::Client::new())
 }
 
-/// Espera el callback OAuth en http://localhost:1653/?code=... y devuelve el code.
+/// Espera el callback OAuth en el redirect configurado (por defecto
+/// http://localhost:1653/?code=...) y devuelve el code.
 async fn wait_for_ms_code() -> Result<String, String> {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:1653")
+    // Puerto extraído del redirect (soporta http://localhost:PUERTO/callback).
+    let port: u16 = ms_redirect_uri()
+        .rsplit(':')
+        .next()
+        .and_then(|p| p.split('/').next())
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(1653);
+    let listener = tokio::net::TcpListener::bind(format!("127.0.0.1:{}", port))
         .await
-        .map_err(|e| format!("No se pudo abrir el puerto 1653 para el login (¿otra app lo usa?): {}", e))?;
+        .map_err(|e| format!("No se pudo abrir el puerto {} para el login (¿otra app lo usa?): {}", port, e))?;
 
     let (mut socket, _) = tokio::time::timeout(std::time::Duration::from_secs(300), listener.accept())
         .await
@@ -145,7 +160,7 @@ async fn ms_exchange_code(raw_code: &str) -> Result<(String, Option<String>), St
         ("client_id", ms_client_id()),
         ("code", code),
         ("grant_type", "authorization_code".to_string()),
-        ("redirect_uri", MS_REDIRECT_URI.to_string()),
+        ("redirect_uri", ms_redirect_uri()),
         ("scope", MS_SCOPE.to_string()),
     ];
     let v: serde_json::Value = ms_http()
@@ -710,7 +725,7 @@ pub async fn login_microsoft(
     let auth_url = format!(
         "https://login.microsoftonline.com/consumers/oauth2/v2.0/authorize?client_id={}&response_type=code&redirect_uri={}&response_mode=query&scope={}&prompt=login&domain_hint=consumers",
         ms_client_id(),
-        urlencoding::encode(MS_REDIRECT_URI),
+        urlencoding::encode(&ms_redirect_uri()),
         urlencoding::encode(MS_SCOPE),
     );
     app_handle
