@@ -120,15 +120,19 @@ struct MsTokenResponse {
     refresh_token: Option<String>,
 }
 
-async fn ms_exchange_code(code: &str) -> Result<(String, Option<String>), String> {
+async fn ms_exchange_code(raw_code: &str) -> Result<(String, Option<String>), String> {
+    // El code viaja URL-escaped en el callback; hay que decodificarlo.
+    let code = urlencoding::decode(raw_code)
+        .map(|s| s.into_owned())
+        .unwrap_or_else(|_| raw_code.to_string());
     let params = [
         ("client_id", MS_CLIENT_ID.to_string()),
-        ("code", code.to_string()),
+        ("code", code),
         ("grant_type", "authorization_code".to_string()),
         ("redirect_uri", MS_REDIRECT_URI.to_string()),
         ("scope", MS_SCOPE.to_string()),
     ];
-    let res: MsTokenResponse = ms_http()
+    let v: serde_json::Value = ms_http()
         .post("https://login.microsoftonline.com/consumers/oauth2/v2.0/token")
         .form(&params)
         .send()
@@ -137,7 +141,27 @@ async fn ms_exchange_code(code: &str) -> Result<(String, Option<String>), String
         .json()
         .await
         .map_err(|e| format!("Respuesta inválida de Microsoft: {}", e))?;
-    Ok((res.access_token, res.refresh_token))
+    if let Some(err) = v.get("error").and_then(|e| e.as_str()) {
+        let desc = v
+            .get("error_description")
+            .and_then(|e| e.as_str())
+            .unwrap_or("");
+        return Err(format!(
+            "Microsoft rechazó el código ({}): {}",
+            err,
+            desc.chars().take(300).collect::<String>()
+        ));
+    }
+    let access = v
+        .get("access_token")
+        .and_then(|t| t.as_str())
+        .ok_or("Microsoft no devolvió access_token.")?
+        .to_string();
+    let refresh = v
+        .get("refresh_token")
+        .and_then(|t| t.as_str())
+        .map(|s| s.to_string());
+    Ok((access, refresh))
 }
 
 async fn ms_refresh(refresh_token: &str) -> Result<(String, Option<String>), String> {

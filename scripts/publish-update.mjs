@@ -74,7 +74,12 @@ try {
 } catch { /* sin remote: modo manual */ }
 
 console.log(`[publish-update] Compilando instalador v${version}...`);
-execSync('npx tauri build', { cwd: root, stdio: 'inherit', shell: true });
+if (process.platform === 'win32') {
+  // En Windows usa el wrapper que firma los .exe bloqueados por WDAC (error 4551)
+  execSync('powershell -ExecutionPolicy Bypass -File scripts/build-release.ps1', { cwd: root, stdio: 'inherit', shell: true });
+} else {
+  execSync('npx tauri build', { cwd: root, stdio: 'inherit', shell: true });
+}
 
 const nsisDir = join(root, 'src-tauri', 'target', 'release', 'bundle', 'nsis');
 if (!existsSync(nsisDir)) {

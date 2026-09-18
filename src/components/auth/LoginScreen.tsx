@@ -87,23 +87,43 @@ export function LoginScreen() {
               <motion.p initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.2 }}
                 className="text-dark-400 text-center text-sm mb-8">Tu portal al mundo de Minecraft</motion.p>
 
-              {/* Quick login */}
+              {/* Quick login por tipo de cuenta */}
               {savedAccounts.length > 0 && (
-                <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.25 }} className="mb-5">
-                  <p className="text-xs font-semibold text-dark-400 uppercase tracking-wider mb-2 flex items-center gap-1.5">
-                    <Zap size={12} className="text-accent-400" /> Inicio rápido
-                  </p>
-                  <div className="space-y-2">
-                    {savedAccounts.map((acc, i) => (
+                <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.25 }} className="mb-5 space-y-4">
+                  {([
+                    { key: 'microsoft', title: 'Cuentas premium', accounts: savedAccounts.filter((a) => a.type === 'microsoft') },
+                    { key: 'offline', title: 'Cuentas offline', accounts: savedAccounts.filter((a) => a.type !== 'microsoft') },
+                  ]).filter((g) => g.accounts.length > 0).map((group) => (
+                    <div key={group.key}>
+                      <p className="text-xs font-semibold text-dark-400 uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                        {group.key === 'microsoft'
+                          ? <Shield size={12} className="text-emerald-400" />
+                          : <Zap size={12} className="text-accent-400" />}
+                        {group.title}
+                        <span className="ml-auto text-[10px] text-dark-500 normal-case font-medium">{group.accounts.length}</span>
+                      </p>
+                      <div className="space-y-2">
+                      {group.accounts.map((acc, i) => (
                       <motion.div key={acc.username} initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.3 + i * 0.05 }}
                         whileHover={{ scale: 1.01, x: 3 }} whileTap={{ scale: 0.99 }}
                         onClick={() => handleQuickLogin(acc)}
                         className="w-full flex items-center gap-3 px-4 py-3 glass-card-hover cursor-pointer group">
-                        <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-primary-500 to-accent-500 flex items-center justify-center shadow-md">
-                          <span className="text-sm font-bold text-white">{acc.username.charAt(0).toUpperCase()}</span>
+                        <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-primary-500 to-accent-500 flex items-center justify-center shadow-md overflow-hidden shrink-0">
+                          {acc.skinUrl ? (
+                            <img src={acc.skinUrl} alt={acc.username} className="w-full h-full object-cover" />
+                          ) : (
+                            <span className="text-sm font-bold text-white">{acc.username.charAt(0).toUpperCase()}</span>
+                          )}
                         </div>
                         <div className="flex-1 min-w-0">
-                          <p className="text-sm font-semibold text-white">{acc.username}</p>
+                          <p className="text-sm font-semibold text-white flex items-center gap-1.5">
+                            <span className="truncate">{acc.username}</span>
+                            {acc.type === 'microsoft' ? (
+                              <span className="px-1.5 py-px rounded text-[9px] font-bold bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 shrink-0">PREMIUM</span>
+                            ) : (
+                              <span className="px-1.5 py-px rounded text-[9px] font-bold bg-dark-700 text-dark-400 shrink-0">OFFLINE</span>
+                            )}
+                          </p>
                           <p className="text-[10px] text-dark-500 capitalize">{acc.type}</p>
                         </div>
                         <div className="flex items-center gap-1.5">
@@ -116,8 +136,10 @@ export function LoginScreen() {
                           </motion.span>
                         </div>
                       </motion.div>
+                      ))}
+                      </div>
+                    </div>
                     ))}
-                  </div>
                 </motion.div>
               )}
 
