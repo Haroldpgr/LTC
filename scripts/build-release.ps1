@@ -51,10 +51,31 @@ for ($try = 1; $try -le $MaxTries; $try++) {
   $logText = ""
   if (Test-Path $log) { $logText = Get-Content $log -Raw }
 
-  # 1. ¿Bloqueo WDAC? -> firmar y reintentar
+  # 1. ¿Bloqueo WDAC? -> firmar y reintentar. El mensaje de cargo parte la
+  # ruta en varias líneas ("could not execute process \n`ruta`\n(never executed)"),
+  # así que se buscan todos los fragmentos entre backticks y se firma el que exista.
   $blocked = $null
-  if ($logText -match 'could not execute process `([^`]+)`') {
-    $blocked = $Matches[1]
+  if ($logText -match '4551|bloque') {
+    $re = [regex]'`([^`]+)`'
+    foreach ($m in $re.Matches($logText)) {
+      $cand = $m.Groups[1].Value.Trim()
+      if (-not [System.IO.Path]::IsPathRooted($cand)) {
+        $cand = Join-Path (Join-Path $root "src-tauri") $cand
+      }
+      # Cargo muestra la ruta sin extensión, pero el archivo real es .exe
+      if (-not (Test-Path $cand)) {
+        foreach ($suf in @('.exe', '.bat', '.cmd')) {
+          if (Test-Path ($cand + $suf)) { $cand = $cand + $suf; break }
+        }
+      }
+      if (($cand -like '*target*') -and (Test-Path $cand)) {
+        $blocked = $cand
+        break
+      }
+    }
+    if (-not $blocked -and ($logText -match 'could not execute process `([^`]+)`')) {
+      $blocked = $Matches[1]
+    }
   }
   if ($blocked -and ($logText -match '4551|bloque')) {
     $full = $blocked
