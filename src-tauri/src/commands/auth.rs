@@ -266,28 +266,60 @@ async fn minecraft_login(uhs: &str, xsts_token: &str) -> Result<(String, String,
     struct McToken {
         access_token: String,
     }
-    let login_resp = ms_http()
-        .post("https://api.minecraftservices.com/authentication/login_with_xbox")
-        .json(&serde_json::json!({
-            "identityToken": format!("XBL3.0 x={};{}", uhs, xsts_token),
-        }))
-        .send()
-        .await
-        .map_err(|e| format!("Error con Minecraft Services: {}", e))?;
-    if !login_resp.status().is_success() {
-        let body = login_resp.text().await.unwrap_or_default();
-        let short = body.chars().take(300).collect::<String>();
-        if short.contains("NOT_FOUND")
-            || short.contains("No Minecraft account")
-            || short.contains("does not own")
+    // login_with_xbox a veces falla de forma transitoria: un reintento.
+    let mut last_err = String::new();
+    let mut login_resp = None;
+    for attempt in 1..=2 {
+        match ms_http()
+            .post("https://api.minecraftservices.com/authentication/login_with_xbox")
+            .json(&serde_json::json!({
+                "identityToken": format!("XBL3.0 x={};{}", uhs, xsts_token),
+            }))
+            .send()
+            .await
         {
-            return Err("Esta cuenta Microsoft no tiene Minecraft: Java Edition comprado o vinculado.".to_string());
+            Ok(resp) => {
+                if resp.status().is_success() {
+                    login_resp = Some(resp);
+                    break;
+                }
+                let status = resp.status();
+                let body = resp.text().await.unwrap_or_default();
+                last_err = body.chars().take(300).collect::<String>();
+                // Solo reintentar errores temporales del servidor
+                if !(status == reqwest::StatusCode::TOO_MANY_REQUESTS || status.is_server_error()) {
+                    break;
+                }
+                if attempt < 2 {
+                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                }
+            }
+            Err(e) => {
+                last_err = format!("Error con Minecraft Services: {}", e);
+                if attempt < 2 {
+                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                }
+            }
         }
-        return Err(format!(
-            "Minecraft Services rechazó el login: {}. Revisa que la cuenta tenga Minecraft: Java Edition comprado.",
-            short.chars().take(200).collect::<String>()
-        ));
     }
+    let login_resp = match login_resp {
+        Some(r) => r,
+        None => {
+            if last_err.contains("NOT_FOUND")
+                || last_err.contains("No Minecraft account")
+                || last_err.contains("does not own")
+            {
+                return Err("Esta cuenta Microsoft no tiene Minecraft: Java Edition comprado o vinculado.".to_string());
+            }
+            if last_err.contains("Invalid app registration") {
+                return Err("Mojang no aceptó el inicio de sesión (registro de app inválido). Esto pasa cuando la cuenta NO tiene Java Edition: el Game Pass de CONSOLA no incluye Java, necesitas PC Game Pass o Ultimate activo, y entrar con la cuenta personal que tiene la suscripción (no la del trabajo/escuela).".to_string());
+            }
+            return Err(format!(
+                "Minecraft Services rechazó el login: {}",
+                last_err.chars().take(200).collect::<String>()
+            ));
+        }
+    };
     let tok: McToken = login_resp
         .json()
         .await
