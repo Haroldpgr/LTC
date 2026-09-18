@@ -323,13 +323,71 @@ fn extract_mc_token(v: &serde_json::Value) -> Option<String> {
         .map(|s| s.to_string())
 }
 
-fn ms_debug_log(endpoint: &str, status: &str, body: &str, uhs_len: usize, xtoken_len: usize) {
+fn b64url_decode(input: &str) -> Option<Vec<u8>> {
+    const ALPH: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    let mut out = Vec::new();
+    let mut buf: u32 = 0;
+    let mut bits = 0;
+    for &c in input.as_bytes() {
+        if c == b'=' {
+            break;
+        }
+        let v = ALPH.iter().position(|&x| x == c)? as u32;
+        buf = (buf << 6) | v;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((buf >> bits) as u8);
+            buf &= (1 << bits) - 1;
+        }
+    }
+    Some(out)
+}
+
+/// Resume los claims del payload JWT (sin secretos: solo claves y Trinity/testigos).
+fn jwt_claim_summary(token: &str) -> String {
+    let parts: Vec<&str> = token.split('.').collect();
+    if parts.len() != 3 {
+        return format!("formato-no-jwt(partes={})", parts.len());
+    }
+    let payload = match b64url_decode(parts[1]) {
+        Some(p) => p,
+        None => return "payload-no-decodificable".to_string(),
+    };
+    let v: serde_json::Value = match serde_json::from_slice(&payload) {
+        Ok(v) => v,
+        Err(_) => return format!("payload-no-json(len={})", payload.len()),
+    };
+    let mut keys: Vec<String> = vec![];
+    if let Some(o) = v.as_object() {
+        for (k, val) in o {
+            let preview = match val {
+                serde_json::Value::String(s) => {
+                    if s.len() > 40 {
+                        format!("str({})", s.len())
+                    } else {
+                        format!("{:?}", s)
+                    }
+                }
+                serde_json::Value::Number(n) => format!("num({})", n),
+                serde_json::Value::Bool(b) => format!("bool({})", b),
+                serde_json::Value::Array(a) => format!("array({})", a.len()),
+                serde_json::Value::Object(o) => format!("obj({})", o.keys().count()),
+                serde_json::Value::Null => "null".to_string(),
+            };
+            keys.push(format!("{}={}", k, preview));
+        }
+    }
+    format!("claims[{}]", keys.join(","))
+}
+
+fn ms_debug_log(endpoint: &str, status: &str, body: &str, uhs: &str, xsts_token: &str) {
     let line = serde_json::json!({
         "ts": chrono::Local::now().to_rfc3339(),
         "endpoint": endpoint,
         "status": status,
-        "uhs_len": uhs_len,
-        "xtoken_len": xtoken_len,
+        "uhs": uhs,
+        "xsts_claims": jwt_claim_summary(xsts_token),
         "body": body.chars().take(1000).collect::<String>(),
     });
     if let Some(mut dir) = dirs::data_dir() {
@@ -375,18 +433,18 @@ async fn minecraft_login(uhs: &str, xsts_token: &str) -> Result<(String, String,
                 }
                 if mc_token.is_none() {
                     first_err = "Respuesta sin access_token en /launcher/login".to_string();
-                    ms_debug_log("/launcher/login", "200-sin-token", &first_err, uhs.len(), xtoken.len());
+                    ms_debug_log("/launcher/login", "200-sin-token", &first_err, uhs, xsts_token);
                 }
             } else {
                 let status = resp.status();
                 let body = resp.text().await.unwrap_or_default();
                 first_err = format!("HTTP {}: {}", status, body.chars().take(300).collect::<String>());
-                ms_debug_log("/launcher/login", &status.to_string(), &body, uhs.len(), xtoken.len());
+                ms_debug_log("/launcher/login", &status.to_string(), &body, uhs, xsts_token);
             }
         }
         Err(e) => {
             first_err = format!("Error con Minecraft Services: {}", e);
-            ms_debug_log("/launcher/login", "network-error", &first_err, uhs.len(), xtoken.len());
+            ms_debug_log("/launcher/login", "network-error", &first_err, uhs, xsts_token);
         }
     }
 
@@ -407,18 +465,18 @@ async fn minecraft_login(uhs: &str, xsts_token: &str) -> Result<(String, String,
                     }
                     if mc_token.is_none() {
                         last_err = "Respuesta sin access_token en login_with_xbox".to_string();
-                        ms_debug_log("/authentication/login_with_xbox", "200-sin-token", &last_err, uhs.len(), xtoken.len());
+                        ms_debug_log("/authentication/login_with_xbox", "200-sin-token", &last_err, uhs, xsts_token);
                     }
                 } else {
                     let status = resp.status();
                     let body = resp.text().await.unwrap_or_default();
                     last_err = format!("HTTP {}: {}", status, body.chars().take(300).collect::<String>());
-                    ms_debug_log("/authentication/login_with_xbox", &status.to_string(), &body, uhs.len(), xtoken.len());
+                    ms_debug_log("/authentication/login_with_xbox", &status.to_string(), &body, uhs, xsts_token);
                 }
             }
             Err(e) => {
                 last_err = format!("Error con Minecraft Services: {}", e);
-                ms_debug_log("/authentication/login_with_xbox", "network-error", &last_err, uhs.len(), xtoken.len());
+                ms_debug_log("/authentication/login_with_xbox", "network-error", &last_err, uhs, xsts_token);
             }
         }
     }
