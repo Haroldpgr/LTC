@@ -4,7 +4,6 @@ use std::sync::Mutex;
 use tauri::{AppHandle, State};
 use tauri_plugin_opener::OpenerExt;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Account {
@@ -703,9 +702,13 @@ pub async fn login_microsoft(
     app_handle: AppHandle,
     state: State<'_, Mutex<AuthState>>,
 ) -> Result<Account, String> {
-    // 1. Abrir el navegador con tu app de Azure (LTC)
+    // 1. Abrir el navegador con tu app de Azure (LTC).
+    // domain_hint=consumers fuerza el contexto de cuentas personales (si entra
+    // una cuenta del trabajo/escuela, Azure la rechaza en vez de dar tokens de
+    // otra identidad) y prompt=login obliga a escribir credenciales (sin reusar
+    // silenciosamente la última sesión del navegador).
     let auth_url = format!(
-        "https://login.microsoftonline.com/consumers/oauth2/v2.0/authorize?client_id={}&response_type=code&redirect_uri={}&response_mode=query&scope={}&prompt=select_account",
+        "https://login.microsoftonline.com/consumers/oauth2/v2.0/authorize?client_id={}&response_type=code&redirect_uri={}&response_mode=query&scope={}&prompt=login&domain_hint=consumers",
         ms_client_id(),
         urlencoding::encode(MS_REDIRECT_URI),
         urlencoding::encode(MS_SCOPE),
@@ -729,6 +732,98 @@ pub async fn login_microsoft(
     Ok(account)
 }
 
+/// UUID v3 estilo Java (MD5 de "OfflinePlayer:<nombre>"), igual que Prism y
+/// otros launchers: el mismo nombre siempre da el mismo UUID (inventario y
+/// progreso del servidor se conservan).
+fn offline_uuid(username: &str) -> String {
+    use md5::Digest;
+    let mut hasher = md5::Md5::new();
+    hasher.update(format!("OfflinePlayer:{}", username).as_bytes());
+    let mut digest = hasher.finalize().to_vec();
+    digest[6] = (digest[6] & 0x0f) | 0x30;
+    digest[8] = (digest[8] & 0x3f) | 0x80;
+    hex::encode(&digest)
+}
+
+/// ¿Modelo Steve (true) o Alex (false) por defecto según el UUID? (igual que Prism)
+fn is_default_steve(uuid_no_dashes: &str) -> bool {
+    let clean: String = uuid_no_dashes.chars().filter(|c| *c != '-').collect();
+    if clean.len() != 32 {
+        return true;
+    }
+    let most = u64::from_str_radix(&clean[..16], 16).unwrap_or(0);
+    let least = u64::from_str_radix(&clean[16..], 16).unwrap_or(0);
+    let xored = most ^ least;
+    (((xored >> 32) as u32) ^ (xored as u32)) % 2 == 0
+}
+
+#[tauri::command]
+pub async fn default_skin_kind(uuid: String) -> Result<String, String> {
+    Ok(if is_default_steve(&uuid) {
+        "steve".to_string()
+    } else {
+        "alex".to_string()
+    })
+}
+
+const STEVE_TEX: &str = "1a4af718455d4aab528e7a61f86fa25e6a369d1768dcb13f7df319a713eb810b";
+const ALEX_TEX: &str = "83cee5ca6afcdb171285aa00e8049c297b2dbeba0efb8ff970a5677a1b644032";
+
+fn b64_encode(data: &[u8]) -> String {
+    const ALPH: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity((data.len() + 2) / 3 * 4);
+    for chunk in data.chunks(3) {
+        let b0 = chunk[0] as u32;
+        let b1 = *chunk.get(1).unwrap_or(&0) as u32;
+        let b2 = *chunk.get(2).unwrap_or(&0) as u32;
+        let n = (b0 << 16) | (b1 << 8) | b2;
+        out.push(ALPH[((n >> 18) & 63) as usize] as char);
+        out.push(ALPH[((n >> 12) & 63) as usize] as char);
+        out.push(if chunk.len() > 1 {
+            ALPH[((n >> 6) & 63) as usize] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            ALPH[(n & 63) as usize] as char
+        } else {
+            '='
+        });
+    }
+    out
+}
+
+/// Devuelve la skin Steve/Alex por defecto (data-URL PNG) para un nombre o uuid.
+/// Si se da uuid se usa ese; si no, se deriva el uuid offline del nombre.
+#[tauri::command]
+pub async fn default_skin_dataurl(username: String, uuid: Option<String>) -> Result<String, String> {
+    let id = match uuid.filter(|u| !u.trim().is_empty()) {
+        Some(u) => u.chars().filter(|c| *c != '-').collect::<String>(),
+        None => offline_uuid(&username),
+    };
+    let tex = if is_default_steve(&id) {
+        STEVE_TEX
+    } else {
+        ALEX_TEX
+    };
+    let bytes = reqwest::Client::builder()
+        .user_agent("LTC-Launcher/1.0.0 (contact@ltc.dev)")
+        .timeout(std::time::Duration::from_secs(20))
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new())
+        .get(format!("https://textures.minecraft.net/texture/{}", tex))
+        .send()
+        .await
+        .map_err(|e| format!("No se pudo descargar la skin por defecto: {}", e))?
+        .bytes()
+        .await
+        .map_err(|e| format!("No se pudo leer la skin por defecto: {}", e))?;
+    if bytes.len() < 8 || &bytes[..8] != b"\x89PNG\r\n\x1a\n" {
+        return Err("La skin descargada no es un PNG válido.".to_string());
+    }
+    Ok(format!("data:image/png;base64,{}", b64_encode(&bytes)))
+}
+
 #[tauri::command]
 pub async fn login_offline(
     username: String,
@@ -738,7 +833,7 @@ pub async fn login_offline(
         return Err("El nombre debe tener entre 1 y 16 caracteres".to_string());
     }
 
-    let uuid = Uuid::new_v4().to_string().replace("-", "");
+    let uuid = offline_uuid(&username);
     let account = Account {
         account_type: "offline".to_string(),
         username,

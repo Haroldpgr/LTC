@@ -37,6 +37,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             auth::login_microsoft,
             auth::login_offline,
+            auth::default_skin_kind,
+            auth::default_skin_dataurl,
             auth::logout,
             auth::check_session,
             auth::get_saved_accounts,

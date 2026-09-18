@@ -16,7 +16,7 @@ import { useState } from 'react';
 import { AdminLoginModal } from '@/components/admin/AdminLoginModal';
 import { AnimatedLogo } from '@/components/common/AnimatedLogo';
 import { InstanceIcon } from '@/components/common/InstanceIcon';
-import { SkinFace } from '@/components/common/SkinFace';
+import { AccountAvatar } from '@/components/common/AccountAvatar';
 
 const contentCategories = [
   { id: 'mods' as const, label: 'Mods', icon: Package },
@@ -57,15 +57,18 @@ export function Sidebar() {
         {/* User section */}
         <div className="px-4 py-3 border-b border-white/5">
           <div className="flex items-center gap-3">
-            {account?.skinUrl ? (
+            {account ? (
               <div className="border border-white/10 rounded-xl overflow-hidden">
-                <SkinFace src={account.skinUrl} alt={account.username} size={40} roundedClass="" />
+                <AccountAvatar
+                  skinUrl={account.skinUrl}
+                  username={account.username}
+                  uuid={account.uuid}
+                  size={40}
+                />
               </div>
             ) : (
               <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-primary-500 to-accent-500 flex items-center justify-center shadow-lg shadow-primary-500/20">
-                <span className="text-sm font-bold text-white">
-                  {account?.username?.charAt(0).toUpperCase()}
-                </span>
+                <span className="text-sm font-bold text-white">?</span>
               </div>
             )}
             <div className="flex-1 min-w-0">
