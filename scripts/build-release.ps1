@@ -51,45 +51,48 @@ for ($try = 1; $try -le $MaxTries; $try++) {
   $logText = ""
   if (Test-Path $log) { $logText = Get-Content $log -Raw }
 
-  # 1. ¿Bloqueo WDAC? -> firmar y reintentar. El mensaje de cargo parte la
-  # ruta en varias líneas ("could not execute process \n`ruta`\n(never executed)"),
-  # así que se buscan todos los fragmentos entre backticks y se firma el que exista.
-  $blocked = $null
+  # 1. ¿Bloqueo WDAC? -> firmar y reintentar. Cargo muestra la ruta de
+  # varias formas: entre backticks (a veces sin extensión), o ruta desnuda
+  # .dll/.exe tras "error:". Se recogen TODAS las candidatas bajo target/
+  # y se firman: cada intento supera un paso y cargo cachea el progreso.
+  $blockedList = @()
   if ($logText -match '4551|bloque') {
+    $cands = @()
     $re = [regex]'`([^`]+)`'
-    foreach ($m in $re.Matches($logText)) {
-      $cand = $m.Groups[1].Value.Trim()
+    foreach ($m in $re.Matches($logText)) { $cands += $m.Groups[1].Value.Trim() }
+    $re2 = [regex]'([A-Za-z]:\\[^\s:"`]+?\.(dll|exe))'
+    foreach ($m in $re2.Matches($logText)) { $cands += $m.Groups[1].Value.Trim() }
+    foreach ($c in $cands) {
+      $cand = $c
       if (-not [System.IO.Path]::IsPathRooted($cand)) {
         $cand = Join-Path (Join-Path $root "src-tauri") $cand
       }
       # Cargo muestra la ruta sin extensión, pero el archivo real es .exe
       if (-not (Test-Path $cand)) {
-        foreach ($suf in @('.exe', '.bat', '.cmd')) {
+        foreach ($suf in @('.exe', '.dll')) {
           if (Test-Path ($cand + $suf)) { $cand = $cand + $suf; break }
         }
       }
-      if (($cand -like '*target*') -and (Test-Path $cand)) {
-        $blocked = $cand
-        break
+      if (($cand -like '*target*') -and (Test-Path $cand) -and ($blockedList -notcontains $cand)) {
+        $blockedList += $cand
       }
-    }
-    if (-not $blocked -and ($logText -match 'could not execute process `([^`]+)`')) {
-      $blocked = $Matches[1]
     }
   }
-  if ($blocked -and ($logText -match '4551|bloque')) {
-    $full = $blocked
-    if (-not [System.IO.Path]::IsPathRooted($full)) {
-      $full = Join-Path (Join-Path $root "src-tauri") $full
-    }
-    Write-Host "[build] WDAC bloqueó: $full"
-    if (Test-Path $full) {
+  if ($blockedList.Count -gt 0) {
+    $signedAny = $false
+    foreach ($full in $blockedList) {
+      Write-Host "[build] WDAC bloqueó: $full"
       if (Sign-File $full $cert) {
-        Write-Host "[build] Firmado OK, reintentando..."
-        continue
+        Write-Host "[build] Firmado OK: $(Split-Path $full -Leaf)"
+        $signedAny = $true
+      } else {
+        Write-Host "[build] No se pudo firmar $full"
       }
     }
-    Write-Host "[build] No se pudo firmar $full, reintentando de todos modos..."
+    if ($signedAny) {
+      Write-Host "[build] Reintentando..."
+      continue
+    }
     Start-Sleep -Seconds 2
     continue
   }
