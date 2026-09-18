@@ -81,12 +81,9 @@ export function AdminPanel() {
   const [exportMsg, setExportMsg] = useState('');
   const [exportingId, setExportingId] = useState<string | null>(null);
   const [appVersion, setAppVersion] = useState('');
-  const [updateUrl, setUpdateUrl] = useState('');
   const [githubToken, setGithubToken] = useState('');
   const [tokenMsg, setTokenMsg] = useState('');
   const [tokenReady, setTokenReady] = useState(false);
-  const [updateCheck, setUpdateCheck] = useState('');
-  const [checkingUpdate, setCheckingUpdate] = useState(false);
   const [relVersion, setRelVersion] = useState('');
   const [relNotes, setRelNotes] = useState('');
   const [relLog, setRelLog] = useState<string[]>([]);
@@ -221,20 +218,8 @@ export function AdminPanel() {
       setAppVersion(await getVersion());
     } catch { /* noop */ }
     try {
-      setUpdateUrl(await invoke<string>('get_update_url'));
-    } catch { /* noop */ }
-    try {
       setTokenReady(await invoke<boolean>('has_github_token'));
     } catch { /* noop */ }
-  };
-
-  const handleSaveUpdateUrl = async () => {
-    try {
-      await invoke('set_update_url', { url: updateUrl });
-      setUpdateCheck('URL de actualizaciones guardada.');
-    } catch (e) {
-      setUpdateCheck(String(e));
-    }
   };
 
   const handleSaveToken = async () => {
@@ -251,25 +236,6 @@ export function AdminPanel() {
     } catch (e) {
       setTokenMsg(String(e));
     }
-  };
-
-  const handleCheckUpdate = async () => {
-    if (!updateUrl.trim()) {
-      setUpdateCheck('Primero configura y guarda la URL del JSON.');
-      return;
-    }
-    setCheckingUpdate(true);
-    setUpdateCheck('');
-    try {
-      const info = await invoke<{ version: string; notes: string; installerUrl: string }>('check_update_info', { url: updateUrl.trim() });
-      const newer = await invoke<boolean>('is_update_newer', { remote: info.version, current: appVersion || '0.0.0' });
-      setUpdateCheck(newer
-        ? `Hay versión nueva: v${info.version}. Los usuarios la verán al abrir el launcher.`
-        : `El JSON responde v${info.version}: no es más nueva que v${appVersion}.`);
-    } catch (e) {
-      setUpdateCheck(String(e));
-    }
-    setCheckingUpdate(false);
   };
 
   // Progreso de la publicación del release (eventos del backend)
@@ -390,8 +356,8 @@ export function AdminPanel() {
                         <Upload size={12} /> Mods
                       </motion.button>
                       <motion.button whileTap={{ scale: 0.9 }} onClick={() => handleExportPack(inst.id)}
-                        disabled={exportingId === inst.id}
-                        title="Publicar los mods: los sube al pack oficial y les llegan solos a todos"
+                        disabled={exportingId === inst.id || inst.mods.length === 0}
+                        title={inst.mods.length === 0 ? 'Añade mods a la instancia primero' : 'Publicar los mods: los sube al pack oficial y les llegan solos a todos'}
                         className="btn-secondary text-xs flex items-center gap-1 py-1.5 px-3 disabled:opacity-50">
                         <Share2 size={12} /> {exportingId === inst.id ? 'Publicando...' : 'Publicar'}
                       </motion.button>
@@ -438,37 +404,14 @@ export function AdminPanel() {
               </div>
 
               <div className="glass-card p-5 space-y-3">
-                <div>
-                  <label className="text-[11px] font-medium text-dark-400 block mb-1.5">
-                    URL del JSON de actualización (lo ven todos los usuarios)
-                  </label>
-                  <input
-                    type="text"
-                    value={updateUrl}
-                    onChange={(e) => setUpdateUrl(e.target.value)}
-                    placeholder="https://tu-host.com/ltc/update.json"
-                    className="input-field text-xs font-mono"
-                  />
-                </div>
-                <div className="flex gap-2 flex-wrap">
-                  <motion.button whileTap={{ scale: 0.97 }} onClick={handleSaveUpdateUrl} className="btn-primary text-xs flex items-center gap-2">
-                    <Save size={13} /> Guardar URL
-                  </motion.button>
-                  <motion.button whileTap={{ scale: 0.97 }} onClick={handleCheckUpdate} disabled={checkingUpdate} className="btn-secondary text-xs flex items-center gap-2 disabled:opacity-50">
-                    {checkingUpdate ? 'Comprobando...' : 'Comprobar ahora'}
-                  </motion.button>
-                </div>
-                {updateCheck && <p className="text-xs text-primary-300">{updateCheck}</p>}
-              </div>
-
-              <div className="glass-card p-5 space-y-3">
                 <div className="flex items-center gap-2">
                   <Upload size={14} className="text-primary-400" />
                   <h4 className="text-sm font-semibold text-white">Subir release (compila y publica solo)</h4>
                 </div>
                 <p className="text-xs text-dark-400 leading-relaxed">
-                  Elige versión y mensaje, pulsa Subir y listo: compila el instalador, crea el release en GitHub
-                  y sube el instalador + update.json con tu token. Tarda unos minutos; puedes seguir usando el panel.
+                  Elige versión y mensaje y pulsa Subir: se abre una ventana aparte que compila el instalador,
+                  crea el release en GitHub y sube instalador + update.json con tu token.
+                  El launcher puede cerrarse y reabrirse solo a mitad: es normal, el trabajo sigue en esa ventana.
                 </p>
                 <div className="grid grid-cols-[130px_1fr] gap-2">
                   <input
@@ -513,29 +456,32 @@ export function AdminPanel() {
                 </ol>
               </div>
 
-              <div className="glass-card p-5">
-                <h4 className="text-sm font-semibold text-white mb-2">Pack oficial de mods (publicar con un clic)</h4>
-                <p className="text-xs text-dark-400 leading-relaxed mb-3">
-                  Añade o quita mods en tu instancia y pulsa <span className="text-primary-300 font-medium">Publicar</span>:
-                  el launcher los sube solo al pack oficial y a los usuarios les aparecen al abrir el launcher o al darle a Jugar,
-                  sin pegar enlaces ni hacer nada más. Para publicar una sola vez necesitas un token de GitHub
-                  (github.com → Settings → Developer settings → Personal access tokens → Tokens (classic) → Generate,
-                  con permiso <span className="font-mono">repo</span>). Solo se guarda en tu PC.
+              <div className="glass-card p-5 space-y-3">
+                <div className="flex items-center gap-2">
+                  <Shield size={14} className="text-emerald-400" />
+                  <h4 className="text-sm font-semibold text-white">Token de GitHub</h4>
+                  {tokenReady && (
+                    <span className="px-2 py-0.5 bg-emerald-500/15 text-emerald-400 border border-emerald-500/25 rounded-full text-[10px] font-bold">
+                      Activo
+                    </span>
+                  )}
+                </div>
+                <p className="text-xs text-dark-400 leading-relaxed">
+                  Sirve para publicar mods y releases sin tocar la web. Solo vive en tu PC: pégalo de nuevo cuando quieras renovarlo.
                 </p>
                 <div className="flex flex-col md:flex-row gap-2">
                   <input
                     type="password"
                     value={githubToken}
                     onChange={(e) => setGithubToken(e.target.value)}
-                    placeholder={tokenReady ? 'Token configurado (pégalo de nuevo para cambiarlo)' : 'Pega aquí tu token de GitHub'}
+                    placeholder={tokenReady ? 'Pégalo de nuevo para renovarlo' : 'Pega aquí tu token de GitHub'}
                     className="input-field text-xs font-mono flex-1"
                   />
                   <motion.button whileTap={{ scale: 0.97 }} onClick={handleSaveToken} className="btn-primary text-xs flex items-center gap-2 shrink-0">
-                    <Save size={13} /> Guardar token
+                    <Save size={13} /> {tokenReady ? 'Renovar token' : 'Guardar token'}
                   </motion.button>
                 </div>
                 {tokenMsg && <p className="text-xs text-primary-300 mt-2">{tokenMsg}</p>}
-                {tokenReady && !tokenMsg && <p className="text-xs text-emerald-400 mt-2">Publicación activada.</p>}
               </div>
             </motion.div>
           )}

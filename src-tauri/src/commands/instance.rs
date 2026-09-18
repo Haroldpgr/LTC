@@ -123,13 +123,14 @@ pub async fn create_instance(
             .collect(),
         is_installed: instance.is_installed,
         // Pack oficial preconfigurado: lo que publique el admin les llega
-        // solo a los usuarios al darle a Jugar, sin pegar ningún enlace.
-        mods_source: if crate::minecraft::launcher::DEFAULT_MODS_PACK_URL.is_empty() {
-            None
-        } else {
-            Some(crate::minecraft::launcher::ModsSource::new_url(
-                crate::minecraft::launcher::DEFAULT_MODS_PACK_URL.to_string(),
-            ))
+        // solo a los usuarios al abrir el launcher y al darle a Jugar.
+        mods_source: {
+            let url = crate::minecraft::launcher::default_mods_pack_url();
+            if url.is_empty() {
+                None
+            } else {
+                Some(crate::minecraft::launcher::ModsSource::new_url(url))
+            }
         },
     };
 

@@ -18,7 +18,7 @@
 //   https://github.com/TU-USUARIO/TU-REPO/releases/download/vX.Y.Z/update.json
 
 import { execSync, execFileSync } from 'node:child_process';
-import { existsSync, readdirSync, readFileSync, writeFileSync, statSync, copyFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, writeFileSync, statSync, copyFileSync, rmSync } from 'node:fs';
 import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as readline from 'node:readline';
@@ -94,6 +94,18 @@ const tauriConf = JSON.parse(readFileSync(join(root, 'src-tauri', 'tauri.conf.js
 const version = tauriConf.version || '1.0.0';
 const finalNotes = notes || `Actualización v${version}`;
 const tag = `v${version}`;
+
+// Lock anti doble ejecución (el botón del panel puede pulsarse dos veces).
+const lockPath = join(root, 'src-tauri', 'target', 'release', '.publish-lock');
+try {
+  if (existsSync(lockPath) && Date.now() - statSync(lockPath).mtimeMs < 30 * 60 * 1000) {
+    console.error('[publish-update] Ya hay una publicación en curso. Espera a que termine.');
+    process.exit(1);
+  }
+  writeFileSync(lockPath, String(process.pid));
+} catch { /* sin lock: se sigue */ }
+const releaseLock = () => { try { rmSync(lockPath, { force: true }); } catch {} };
+process.on('exit', releaseLock);
 
 // --- Repo destino (del remote origin) ---
 let repoSlug = null;
