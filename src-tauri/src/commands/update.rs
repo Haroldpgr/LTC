@@ -1,8 +1,142 @@
 use crate::commands::instance::InstanceState;
 use serde::Serialize;
+use std::io::BufRead;
 use std::path::PathBuf;
+use std::process::Stdio;
 use std::sync::Mutex;
-use tauri::State;
+use std::sync::atomic::{AtomicBool, Ordering};
+use tauri::{Emitter, State};
+
+static RELEASE_RUNNING: AtomicBool = AtomicBool::new(false);
+
+/// Localiza la raíz del proyecto (necesaria para compilar+publicar).
+/// Funciona desde `tauri dev` (exe en target/debug). Desde el launcher
+/// instalado no hay repo y se devuelve None.
+fn find_repo_root() -> Option<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Ok(cwd) = std::env::current_dir() {
+        candidates.push(cwd);
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(d) = exe.parent() {
+            candidates.push(d.to_path_buf());
+            let mut up = d.to_path_buf();
+            for _ in 0..3 {
+                if up.pop() {
+                    candidates.push(up.clone());
+                }
+            }
+        }
+    }
+    candidates.into_iter().find(|c| {
+        c.join("src-tauri").join("tauri.conf.json").is_file()
+            && c.join("scripts").join("publish-update.mjs").is_file()
+    })
+}
+
+fn valid_version(v: &str) -> bool {
+    let parts: Vec<&str> = v.split('.').collect();
+    parts.len() == 3 && parts.iter().all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()))
+}
+
+/// Compila el instalador y publica el release en GitHub con tu token,
+/// en segundo plano. Progreso por evento `release-log`, fin por `release-done`.
+#[tauri::command]
+pub async fn start_publish_release(
+    version: String,
+    notes: String,
+    app_handle: tauri::AppHandle,
+    state: State<'_, Mutex<InstanceState>>,
+) -> Result<String, String> {
+    let version = version.trim().to_string();
+    if !valid_version(&version) {
+        return Err("Versión inválida: usa formato X.Y.Z (ej. 1.0.2).".to_string());
+    }
+    if RELEASE_RUNNING.swap(true, Ordering::SeqCst) {
+        return Err("Ya hay una publicación en curso.".to_string());
+    }
+    let fail = |msg: String| -> Result<String, String> {
+        RELEASE_RUNNING.store(false, Ordering::SeqCst);
+        Err(msg)
+    };
+
+    let token = {
+        let state_lock = state.lock().map_err(|e| e.to_string())?;
+        state_lock.config.github_token.clone()
+    };
+    if token.trim().is_empty() {
+        return fail("Falta el token de GitHub: configúralo en el Pack de mods primero.".to_string());
+    }
+    let Some(root) = find_repo_root() else {
+        return fail("No se encontró el proyecto: abre el launcher con `npm run tauri dev` o publica con `npm run publish:update`.".to_string());
+    };
+
+    let notes_arg = if notes.trim().is_empty() {
+        format!("Actualización v{}", version)
+    } else {
+        notes.trim().to_string()
+    };
+
+    std::thread::spawn(move || {
+        let emit_line = |line: String| {
+            let _ = app_handle.emit(
+                "release-log",
+                serde_json::json!({ "line": line }),
+            );
+        };
+        let finish = |ok: bool, message: String| {
+            RELEASE_RUNNING.store(false, Ordering::SeqCst);
+            let _ = app_handle.emit(
+                "release-done",
+                serde_json::json!({ "ok": ok, "message": message }),
+            );
+        };
+
+        let mut cmd = std::process::Command::new("node");
+        cmd.args([
+            "scripts/publish-update.mjs",
+            &format!("--version={}", version),
+            &notes_arg,
+        ]);
+        cmd.current_dir(&root)
+            .env("GITHUB_TOKEN", &token)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        crate::minecraft::launcher::Launcher::hide_console(&mut cmd);
+
+        let mut child = match cmd.spawn() {
+            Ok(c) => c,
+            Err(e) => {
+                finish(false, format!("No se pudo lanzar la publicación: {}", e));
+                return;
+            }
+        };
+
+        if let Some(out) = child.stdout.take() {
+            for line in std::io::BufReader::new(out).lines().flatten() {
+                emit_line(line);
+            }
+        }
+        let mut err_text = String::new();
+        if let Some(err) = child.stderr.take() {
+            err_text = std::io::read_to_string(err).unwrap_or_default();
+        }
+        match child.wait() {
+            Ok(st) if st.success() => finish(true, format!("Release v{} publicado.", version)),
+            Ok(st) => finish(
+                false,
+                format!(
+                    "La publicación falló (código {:?}). {}",
+                    st.code(),
+                    err_text.lines().rev().take(3).collect::<Vec<_>>().join(" | ")
+                ),
+            ),
+            Err(e) => finish(false, format!("Error esperando la publicación: {}", e)),
+        }
+    });
+
+    Ok("Publicación iniciada: compila y sube solo, sigue el progreso abajo.".to_string())
+}
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]

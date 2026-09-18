@@ -8,6 +8,7 @@ import {
 } from 'lucide-react';
 import { useInstanceStore } from '@/stores/instanceStore';
 import { open } from '@tauri-apps/plugin-dialog';
+import { listen } from '@tauri-apps/api/event';
 import { readFile } from '@tauri-apps/plugin-fs';
 import { InstanceIcon } from '@/components/common/InstanceIcon';
 import type { ModpackInstance } from '@/types';
@@ -86,6 +87,11 @@ export function AdminPanel() {
   const [tokenReady, setTokenReady] = useState(false);
   const [updateCheck, setUpdateCheck] = useState('');
   const [checkingUpdate, setCheckingUpdate] = useState(false);
+  const [relVersion, setRelVersion] = useState('');
+  const [relNotes, setRelNotes] = useState('');
+  const [relLog, setRelLog] = useState<string[]>([]);
+  const [relRunning, setRelRunning] = useState(false);
+  const [relResult, setRelResult] = useState('');
   const [form, setForm] = useState({
     name: '', description: '', icon: '⛏️', mcVersion: '1.20.1',
     modLoader: 'forge' as 'forge' | 'fabric' | 'none', modLoaderVersion: '47.4.10',
@@ -266,6 +272,50 @@ export function AdminPanel() {
     setCheckingUpdate(false);
   };
 
+  // Progreso de la publicación del release (eventos del backend)
+  useEffect(() => {
+    let unlistenLog: (() => void) | undefined;
+    let unlistenDone: (() => void) | undefined;
+    listen<{ line: string }>('release-log', (e) => {
+      setRelLog((prev) => [...prev.slice(-299), e.payload.line]);
+    }).then((f) => { unlistenLog = f; }).catch(() => {});
+    listen<{ ok: boolean; message: string }>('release-done', (e) => {
+      setRelRunning(false);
+      setRelResult(e.payload.message);
+    }).then((f) => { unlistenDone = f; }).catch(() => {});
+    return () => { unlistenLog?.(); unlistenDone?.(); };
+  }, []);
+
+  // Sugerir siguiente versión parche (1.0.1 -> 1.0.2)
+  useEffect(() => {
+    if (appVersion && !relVersion) {
+      const p = appVersion.split('.').map(Number);
+      if (p.length === 3 && p.every((n) => Number.isFinite(n))) {
+        setRelVersion(`${p[0] ?? 1}.${p[1] ?? 0}.${(p[2] ?? 0) + 1}`);
+      }
+    }
+  }, [appVersion, relVersion]);
+
+  const handleStartRelease = async () => {
+    setRelResult('');
+    if (!/^\d+\.\d+\.\d+$/.test(relVersion.trim())) {
+      setRelResult('Versión inválida: usa formato X.Y.Z (ej. 1.0.2).');
+      return;
+    }
+    setRelLog([]);
+    setRelRunning(true);
+    try {
+      const msg = await invoke<string>('start_publish_release', {
+        version: relVersion.trim(),
+        notes: relNotes.trim(),
+      });
+      setRelResult(msg);
+    } catch (e) {
+      setRelRunning(false);
+      setRelResult(String(e));
+    }
+  };
+
   const tabs = [
     { id: 'instances' as const, label: 'Instancias', icon: Gamepad2 },
     { id: 'create' as const, label: 'Nueva', icon: Plus },
@@ -411,15 +461,55 @@ export function AdminPanel() {
                 {updateCheck && <p className="text-xs text-primary-300">{updateCheck}</p>}
               </div>
 
+              <div className="glass-card p-5 space-y-3">
+                <div className="flex items-center gap-2">
+                  <Upload size={14} className="text-primary-400" />
+                  <h4 className="text-sm font-semibold text-white">Subir release (compila y publica solo)</h4>
+                </div>
+                <p className="text-xs text-dark-400 leading-relaxed">
+                  Elige versión y mensaje, pulsa Subir y listo: compila el instalador, crea el release en GitHub
+                  y sube el instalador + update.json con tu token. Tarda unos minutos; puedes seguir usando el panel.
+                </p>
+                <div className="grid grid-cols-[130px_1fr] gap-2">
+                  <input
+                    type="text"
+                    value={relVersion}
+                    onChange={(e) => setRelVersion(e.target.value)}
+                    placeholder="1.0.2"
+                    className="input-field text-xs font-mono"
+                  />
+                  <input
+                    type="text"
+                    value={relNotes}
+                    onChange={(e) => setRelNotes(e.target.value)}
+                    placeholder="Mensaje del release (notas para los usuarios)"
+                    className="input-field text-xs"
+                  />
+                </div>
+                <motion.button
+                  whileTap={{ scale: 0.97 }}
+                  onClick={handleStartRelease}
+                  disabled={relRunning}
+                  className="btn-primary text-xs flex items-center gap-2 disabled:opacity-50"
+                >
+                  <Upload size={13} /> {relRunning ? 'Publicando...' : 'Compilar y subir release'}
+                </motion.button>
+                {relResult && <p className="text-xs text-primary-300">{relResult}</p>}
+                {relLog.length > 0 && (
+                  <div className="bg-dark-950/90 border border-white/10 rounded-lg p-3 max-h-48 overflow-y-auto font-mono text-[10px] text-dark-300 space-y-0.5">
+                    {relLog.map((line, i) => (
+                      <p key={i} className="break-all whitespace-pre-wrap">{line}</p>
+                    ))}
+                  </div>
+                )}
+              </div>
+
               <div className="glass-card p-5">
-                <h4 className="text-sm font-semibold text-white mb-2">Cómo publicar una update (gratis con GitHub)</h4>
+                <h4 className="text-sm font-semibold text-white mb-2">Cómo les llega a los usuarios</h4>
                 <ol className="text-xs text-dark-400 space-y-1.5 list-decimal list-inside">
-                  <li>Prepara los cambios y ejecuta <span className="font-mono text-primary-300">npm run publish:update -- "Notas"</span>: compila el instalador y genera el <span className="font-mono">update.json</span> junto a él.</li>
-                  <li>Crea cuenta gratis en <span className="font-mono text-primary-300">github.com</span> y un repositorio (ej. ltc-updates). Sin tarjeta, y admite archivos de hasta 2 GB.</li>
-                  <li>En el repo: <span className="font-mono">Releases &gt; Create a new release</span>, tag <span className="font-mono">v{appVersion || 'x.y.z'}</span>, y sube el <span className="font-mono">.exe</span>.</li>
-                  <li>Edita <span className="font-mono">update.json</span> con la URL del .exe (<span className="font-mono">.../releases/download/vX/archivo.exe</span>) y súbelo al mismo release.</li>
-                  <li>Pega arriba la URL pública del <span className="font-mono">update.json</span> y guárdala.</li>
-                  <li>A los usuarios les saldrá el aviso con tus notas; al actualizar, se descarga en segundo plano, se instala en silencio y el launcher se reinicia solo con los cambios.</li>
+                  <li>Al abrir el launcher les sale el aviso con tu mensaje (la URL ya viene configurada de serie).</li>
+                  <li>Al aceptar, se descarga el instalador, se instala en silencio y el launcher se reinicia solo con los cambios.</li>
+                  <li>Si prefieres hacerlo a mano: <span className="font-mono text-primary-300">GITHUB_TOKEN=xxx npm run publish:update -- --version=X.Y.Z "Notas"</span> (te pregunta lo que falte).</li>
                 </ol>
               </div>
 
