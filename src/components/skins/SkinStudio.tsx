@@ -46,48 +46,51 @@ export function SkinStudio() {
     ?? (account?.username === selected ? account.skinUrl : undefined)
     ?? null;
 
-  // Crear el visor 3D una vez
+  // Crear el visor cuando hay canvas, cargar la skin y aplicar animación.
+  // (El canvas solo existe si hay skin que mostrar, así que todo va junto.)
   useEffect(() => {
-    if (!canvasRef.current || viewerRef.current) return;
-    const viewer = new SkinViewer({
-      canvas: canvasRef.current,
-      width: 300,
-      height: 400,
-      preserveDrawingBuffer: false,
-    });
-    viewer.autoRotate = true;
-    viewer.autoRotateSpeed = 1.2;
-    viewerRef.current = viewer;
-    return () => {
-      viewer.dispose();
-      viewerRef.current = null;
-    };
-  }, []);
-
-  // Cargar skin en el visor cuando cambia
-  useEffect(() => {
-    const viewer = viewerRef.current;
-    if (!viewer || !currentSkin) return;
-    viewer.loadSkin(currentSkin, { model: skinModel }).catch(() => {
-      setError('No se pudo cargar la skin en el visor 3D.');
-    });
-  }, [currentSkin, skinModel]);
-
-  // Animación
-  useEffect(() => {
-    const viewer = viewerRef.current;
-    if (!viewer) return;
-    if (!playing || anim === 'none') {
-      viewer.animation = null;
+    const canvas = canvasRef.current;
+    if (!canvas) {
+      if (viewerRef.current) {
+        viewerRef.current.dispose();
+        viewerRef.current = null;
+      }
       return;
     }
-    viewer.animation = anim === 'walk'
-      ? new WalkingAnimation()
-      : anim === 'run'
-        ? new RunningAnimation()
-        : new IdleAnimation();
-    viewer.animation.speed = 0.8;
-  }, [anim, playing]);
+    if (!viewerRef.current) {
+      const created = new SkinViewer({
+        canvas,
+        width: 300,
+        height: 400,
+        preserveDrawingBuffer: false,
+      });
+      created.autoRotate = true;
+      created.autoRotateSpeed = 1.2;
+      viewerRef.current = created;
+    }
+    const viewer = viewerRef.current;
+    if (currentSkin) {
+      viewer.loadSkin(currentSkin, { model: skinModel }).catch(() => {
+        setError('No se pudo cargar la skin en el visor 3D.');
+      });
+    } else {
+      viewer.loadSkin(null);
+    }
+    if (!playing || anim === 'none') {
+      viewer.animation = null;
+    } else {
+      viewer.animation = anim === 'walk'
+        ? new WalkingAnimation()
+        : anim === 'run'
+          ? new RunningAnimation()
+          : new IdleAnimation();
+      viewer.animation.speed = 0.8;
+    }
+    return () => {
+      viewerRef.current?.dispose();
+      viewerRef.current = null;
+    };
+  }, [currentSkin, skinModel, anim, playing]);
 
   useEffect(() => {
     setPreviewUrl(null);

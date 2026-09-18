@@ -207,6 +207,8 @@ struct XstsResponse {
     token: Option<String>,
     #[serde(rename = "XErr")]
     xerr: Option<i64>,
+    #[serde(rename = "DisplayClaims")]
+    display_claims: Option<XblClaims>,
 }
 
 fn xsts_error(xerr: i64) -> String {
@@ -267,6 +269,17 @@ async fn xbox_login(ms_access_token: &str) -> Result<(String, String), String> {
         return Err(xsts_error(err));
     }
     let token = xsts.token.ok_or("XSTS no devolvió token.")?;
+    // Verificación cruzada como Prism: el uhs del XSTS debe coincidir con el de Xbox.
+    if let Some(xsts_uhs) = xsts
+        .display_claims
+        .as_ref()
+        .and_then(|c| c.xui.first())
+        .map(|x| x.uhs.clone())
+    {
+        if xsts_uhs != uhs {
+            return Err("Xbox devolvió identidades inconsistentes (uhs distinto). Reintenta el login.".to_string());
+        }
+    }
     Ok((uhs, token))
 }
 
@@ -304,6 +317,7 @@ async fn minecraft_login(uhs: &str, xsts_token: &str) -> Result<(String, String,
     // Intento 1: endpoint de launchers (PC_LAUNCHER)
     match ms_http()
         .post("https://api.minecraftservices.com/launcher/login")
+        .header("Accept", "application/json")
         .json(&serde_json::json!({
             "xtoken": xtoken,
             "platform": "PC_LAUNCHER",
@@ -334,6 +348,7 @@ async fn minecraft_login(uhs: &str, xsts_token: &str) -> Result<(String, String,
         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
         match ms_http()
             .post("https://api.minecraftservices.com/authentication/login_with_xbox")
+            .header("Accept", "application/json")
             .json(&serde_json::json!({ "identityToken": xtoken }))
             .send()
             .await
