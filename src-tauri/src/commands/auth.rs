@@ -323,6 +323,31 @@ fn extract_mc_token(v: &serde_json::Value) -> Option<String> {
         .map(|s| s.to_string())
 }
 
+fn ms_debug_log(endpoint: &str, status: &str, body: &str, uhs_len: usize, xtoken_len: usize) {
+    let line = serde_json::json!({
+        "ts": chrono::Local::now().to_rfc3339(),
+        "endpoint": endpoint,
+        "status": status,
+        "uhs_len": uhs_len,
+        "xtoken_len": xtoken_len,
+        "body": body.chars().take(1000).collect::<String>(),
+    });
+    if let Some(mut dir) = dirs::data_dir() {
+        dir.push("LTC Launcher");
+        dir.push("logs");
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("ms-login-debug.log");
+        use std::io::Write;
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+        {
+            let _ = writeln!(f, "{}", line);
+        }
+    }
+}
+
 /// Intercambia Xbox (uhs + xsts) por token de Minecraft + perfil (nombre, uuid, skin).
 /// Usa el endpoint de launchers (/launcher/login) como Prism y cía., con
 /// fallback al clásico (/authentication/login_with_xbox).
@@ -350,15 +375,18 @@ async fn minecraft_login(uhs: &str, xsts_token: &str) -> Result<(String, String,
                 }
                 if mc_token.is_none() {
                     first_err = "Respuesta sin access_token en /launcher/login".to_string();
+                    ms_debug_log("/launcher/login", "200-sin-token", &first_err, uhs.len(), xtoken.len());
                 }
             } else {
                 let status = resp.status();
                 let body = resp.text().await.unwrap_or_default();
                 first_err = format!("HTTP {}: {}", status, body.chars().take(300).collect::<String>());
+                ms_debug_log("/launcher/login", &status.to_string(), &body, uhs.len(), xtoken.len());
             }
         }
         Err(e) => {
             first_err = format!("Error con Minecraft Services: {}", e);
+            ms_debug_log("/launcher/login", "network-error", &first_err, uhs.len(), xtoken.len());
         }
     }
 
@@ -379,15 +407,18 @@ async fn minecraft_login(uhs: &str, xsts_token: &str) -> Result<(String, String,
                     }
                     if mc_token.is_none() {
                         last_err = "Respuesta sin access_token en login_with_xbox".to_string();
+                        ms_debug_log("/authentication/login_with_xbox", "200-sin-token", &last_err, uhs.len(), xtoken.len());
                     }
                 } else {
                     let status = resp.status();
                     let body = resp.text().await.unwrap_or_default();
                     last_err = format!("HTTP {}: {}", status, body.chars().take(300).collect::<String>());
+                    ms_debug_log("/authentication/login_with_xbox", &status.to_string(), &body, uhs.len(), xtoken.len());
                 }
             }
             Err(e) => {
                 last_err = format!("Error con Minecraft Services: {}", e);
+                ms_debug_log("/authentication/login_with_xbox", "network-error", &last_err, uhs.len(), xtoken.len());
             }
         }
     }
