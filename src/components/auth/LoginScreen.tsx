@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import { motion, AnimatePresence } from 'framer-motion';
 import { User, Shield, Loader2, Lock, Eye, EyeOff, Zap, Trash2, Cpu, Package, Layers, Server, Palette } from 'lucide-react';
 import { useAuthStore } from '@/stores/authStore';
@@ -12,8 +13,46 @@ export function LoginScreen() {
   const [offlinePassword, setOfflinePassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
-  const { loginMicrosoft, loginOffline, isLoading, error } = useAuthStore();
+  const { loginMicrosoft, loginOffline, isLoading, error, checkSession } = useAuthStore();
   const { savedAccounts, addSavedAccount, removeSavedAccount } = useInstanceStore();
+  const [showCodeDialog, setShowCodeDialog] = useState(false);
+  const [manualCode, setManualCode] = useState('');
+  const [codeBusy, setCodeBusy] = useState(false);
+  const [codeError, setCodeError] = useState('');
+
+  const handleOpenCodePage = async () => {
+    try {
+      await invoke('open_ms_auth_page');
+      setShowCodeDialog(true);
+      setCodeError('');
+    } catch (e) {
+      setCodeError(String(e));
+    }
+  };
+
+  const handleCodeLogin = async () => {
+    if (!manualCode.trim()) return;
+    setCodeBusy(true);
+    setCodeError('');
+    try {
+      const acc = await invoke<{
+        username: string;
+        skinUrl?: string;
+      }>('login_microsoft_with_code', { code: manualCode.trim() });
+      addSavedAccount({
+        username: acc.username,
+        type: 'microsoft',
+        skinUrl: acc.skinUrl,
+        lastUsed: new Date().toISOString(),
+      });
+      await checkSession();
+      setShowCodeDialog(false);
+      setManualCode('');
+    } catch (e) {
+      setCodeError(String(e));
+    }
+    setCodeBusy(false);
+  };
 
   const handleMicrosoft = async () => {
     try {
@@ -168,6 +207,9 @@ export function LoginScreen() {
                 </motion.button>
               </div>
 
+              <button onClick={handleOpenCodePage} className="w-full text-center text-[11px] text-dark-500 hover:text-primary-300 transition-colors mt-1">
+                ¿El navegador no completa el login? Entrar con código manual
+              </button>
               {isLoading && <motion.p initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="text-primary-300 text-xs text-center mt-4">Se abrió tu navegador: completa el login de Microsoft ahí…</motion.p>}
               {error && <motion.p initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="text-red-400 text-xs text-center mt-4">{error}</motion.p>}
             </motion.div>
@@ -307,6 +349,50 @@ export function LoginScreen() {
           </motion.div>
         </motion.div>
       </div>
+
+      {/* Diálogo de código manual (flujo nativeclient) */}
+      <AnimatePresence>
+        {showCodeDialog && (
+          <motion.div
+            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[80] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4"
+            onClick={() => !codeBusy && setShowCodeDialog(false)}
+          >
+            <motion.div
+              initial={{ scale: 0.92, opacity: 0, y: 16 }} animate={{ scale: 1, opacity: 1, y: 0 }} exit={{ scale: 0.92, opacity: 0, y: 16 }}
+              className="glass-card w-full max-w-md p-6"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <h3 className="font-bold text-white text-sm mb-1">Entrar con código manual</h3>
+              <p className="text-xs text-dark-400 mb-4">
+                Se abrió el navegador: inicia sesión y Microsoft mostrará un código.
+                Cópialo y pégalo aquí.
+              </p>
+              <textarea
+                value={manualCode}
+                onChange={(e) => setManualCode(e.target.value)}
+                placeholder="Pega aquí el código..."
+                rows={3}
+                className="input-field text-xs font-mono w-full"
+              />
+              {codeError && <p className="text-xs text-red-400 mt-2 break-words">{codeError}</p>}
+              <div className="flex gap-2 mt-4">
+                <button onClick={() => setShowCodeDialog(false)} disabled={codeBusy} className="btn-secondary flex-1 disabled:opacity-50">
+                  Cancelar
+                </button>
+                <motion.button
+                  whileTap={{ scale: 0.97 }}
+                  onClick={handleCodeLogin}
+                  disabled={codeBusy || !manualCode.trim()}
+                  className="btn-primary flex-1 flex items-center justify-center gap-2 disabled:opacity-50"
+                >
+                  {codeBusy ? 'Verificando...' : 'Entrar'}
+                </motion.button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

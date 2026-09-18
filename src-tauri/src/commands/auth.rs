@@ -151,16 +151,56 @@ struct MsTokenResponse {
     refresh_token: Option<String>,
 }
 
-async fn ms_exchange_code(raw_code: &str) -> Result<(String, Option<String>), String> {
+const NATIVE_CLIENT_REDIRECT: &str = "https://login.microsoftonline.com/common/oauth2/nativeclient";
+
+/// URL de autorización. Con native=true usa el redirect reservado de Microsoft
+/// (no requiere registro; el código se muestra para copiarlo a mano).
+fn ms_auth_url(native: bool) -> String {
+    let redirect = if native {
+        NATIVE_CLIENT_REDIRECT.to_string()
+    } else {
+        ms_redirect_uri()
+    };
+    format!(
+        "https://login.microsoftonline.com/consumers/oauth2/v2.0/authorize?client_id={}&response_type=code&redirect_uri={}&response_mode=query&scope={}&prompt=login&domain_hint=consumers",
+        ms_client_id(),
+        urlencoding::encode(&redirect),
+        urlencoding::encode(MS_SCOPE),
+    )
+}
+
+#[tauri::command]
+pub async fn get_ms_auth_url(native: bool) -> Result<String, String> {
+    Ok(ms_auth_url(native))
+}
+
+/// Abre en el navegador la página de login con flujo nativeclient
+/// (muestra el código para pegarlo a mano).
+#[tauri::command]
+pub async fn open_ms_auth_page(app_handle: AppHandle) -> Result<String, String> {
+    let url = ms_auth_url(true);
+    app_handle
+        .opener()
+        .open_url(&url, None::<&str>)
+        .map_err(|e| format!("No se pudo abrir el navegador: {}", e))?;
+    Ok(url)
+}
+
+async fn ms_exchange_code(raw_code: &str, native: bool) -> Result<(String, Option<String>), String> {
     // El code viaja URL-escaped en el callback; hay que decodificarlo.
-    let code = urlencoding::decode(raw_code)
+    let code = urlencoding::decode(raw_code.trim())
         .map(|s| s.into_owned())
-        .unwrap_or_else(|_| raw_code.to_string());
+        .unwrap_or_else(|_| raw_code.trim().to_string());
+    let redirect = if native {
+        NATIVE_CLIENT_REDIRECT.to_string()
+    } else {
+        ms_redirect_uri()
+    };
     let params = [
         ("client_id", ms_client_id()),
         ("code", code),
         ("grant_type", "authorization_code".to_string()),
-        ("redirect_uri", ms_redirect_uri()),
+        ("redirect_uri", redirect),
         ("scope", MS_SCOPE.to_string()),
     ];
     let v: serde_json::Value = ms_http()
@@ -722,22 +762,38 @@ pub async fn login_microsoft(
     // una cuenta del trabajo/escuela, Azure la rechaza en vez de dar tokens de
     // otra identidad) y prompt=login obliga a escribir credenciales (sin reusar
     // silenciosamente la última sesión del navegador).
-    let auth_url = format!(
-        "https://login.microsoftonline.com/consumers/oauth2/v2.0/authorize?client_id={}&response_type=code&redirect_uri={}&response_mode=query&scope={}&prompt=login&domain_hint=consumers",
-        ms_client_id(),
-        urlencoding::encode(&ms_redirect_uri()),
-        urlencoding::encode(MS_SCOPE),
-    );
+    let auth_url = ms_auth_url(false);
     app_handle
         .opener()
         .open_url(&auth_url, None::<&str>)
         .map_err(|e| format!("No se pudo abrir el navegador: {}", e))?;
 
-    // 2. Esperar el callback en http://localhost:1653
+    // 2. Esperar el callback en el redirect configurado
     let code = wait_for_ms_code().await?;
 
     // 3. Canjear code -> tokens -> Xbox -> Minecraft -> perfil
-    let (ms_token, refresh) = ms_exchange_code(&code).await?;
+    let (ms_token, refresh) = ms_exchange_code(&code, false).await?;
+    let account = build_microsoft_account(&ms_token, refresh).await?;
+
+    let mut auth = state.lock().map_err(|e| e.to_string())?;
+    auth.account = Some(account.clone());
+    write_session(Some(&account));
+
+    Ok(account)
+}
+
+/// Login con código pegado a mano (flujo nativeclient): para diagnósticos o si
+/// el callback automático no funciona. Abre `get_ms_auth_url(true)` en el
+/// navegador, copia el código que muestra Microsoft y pégalo aquí.
+#[tauri::command]
+pub async fn login_microsoft_with_code(
+    code: String,
+    state: State<'_, Mutex<AuthState>>,
+) -> Result<Account, String> {
+    if code.trim().is_empty() {
+        return Err("Pega el código que muestra Microsoft.".to_string());
+    }
+    let (ms_token, refresh) = ms_exchange_code(&code, true).await?;
     let account = build_microsoft_account(&ms_token, refresh).await?;
 
     let mut auth = state.lock().map_err(|e| e.to_string())?;

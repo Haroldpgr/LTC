@@ -36,6 +36,9 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             auth::login_microsoft,
+            auth::login_microsoft_with_code,
+            auth::get_ms_auth_url,
+            auth::open_ms_auth_page,
             auth::login_offline,
             auth::default_skin_kind,
             auth::default_skin_dataurl,
