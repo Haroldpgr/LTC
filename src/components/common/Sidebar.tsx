@@ -28,7 +28,12 @@ const contentCategories = [
 export function Sidebar() {
   const account = useAuthStore((s) => s.account);
   const logout = useAuthStore((s) => s.logout);
+  const savedAccounts = useInstanceStore((s) => s.savedAccounts);
   const instances = useInstanceStore((s) => s.instances);
+  // La skin subida en la pestaña Skins tiene prioridad sobre el Steve por defecto
+  const avatarSkin =
+    account?.skinUrl ??
+    savedAccounts.find((a) => a.username === account?.username)?.skinUrl;
   const selectedInstance = useInstanceStore((s) => s.selectedInstance);
   const selectInstance = useInstanceStore((s) => s.selectInstance);
   const activeTab = useInstanceStore((s) => s.activeTab);
@@ -60,7 +65,7 @@ export function Sidebar() {
             {account ? (
               <div className="border border-white/10 rounded-xl overflow-hidden">
                 <AccountAvatar
-                  skinUrl={account.skinUrl}
+                  skinUrl={avatarSkin}
                   username={account.username}
                   uuid={account.uuid}
                   size={40}
