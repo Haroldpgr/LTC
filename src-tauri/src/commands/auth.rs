@@ -675,10 +675,70 @@ async fn minecraft_login(
     ))
 }
 
+/// Resume público del access token de Microsoft (aud, scopes, tenant, versión).
+/// Sin secretos: nunca incluye el token ni identificadores de usuario.
+fn ms_token_summary(ms_access_token: &str) -> String {
+    let parts: Vec<&str> = ms_access_token.split('.').collect();
+    if parts.len() != 3 {
+        return format!("ms-token-no-jwt(partes={})", parts.len());
+    }
+    let payload = match b64url_decode(parts[1]) {
+        Some(p) => p,
+        None => return "ms-payload-no-decodificable".to_string(),
+    };
+    let v: serde_json::Value = match serde_json::from_slice(&payload) {
+        Ok(v) => v,
+        Err(_) => return "ms-payload-no-json".to_string(),
+    };
+    let get = |k: &str| {
+        v.get(k)
+            .map(|x| {
+                if x.is_string() {
+                    format!("{:?}", x.as_str().unwrap_or(""))
+                } else {
+                    x.to_string()
+                }
+            })
+            .unwrap_or_else(|| "-".to_string())
+    };
+    format!(
+        "aud={} scp={} ver={} tid={} appid={}",
+        get("aud"),
+        get("scp"),
+        get("ver"),
+        get("tid"),
+        get("appid")
+    )
+}
+
+fn ms_debug_line(endpoint: &str, status: &str, body: &str) {
+    let line = serde_json::json!({
+        "ts": chrono::Local::now().to_rfc3339(),
+        "endpoint": endpoint,
+        "status": status,
+        "body": body.chars().take(1000).collect::<String>(),
+    });
+    if let Some(mut dir) = dirs::data_dir() {
+        dir.push("LTC Launcher");
+        dir.push("logs");
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("ms-login-debug.log");
+        use std::io::Write;
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+        {
+            let _ = writeln!(f, "{}", line);
+        }
+    }
+}
+
 async fn build_microsoft_account(
     ms_access_token: &str,
     refresh_token: Option<String>,
 ) -> Result<Account, String> {
+    ms_debug_line("ms-access-token", "claims", &ms_token_summary(ms_access_token));
     let (uhs, xsts, gtg) = xbox_login(ms_access_token).await?;
     let (mc_token, uuid, name, skin) = minecraft_login(&uhs, &xsts, gtg.as_deref()).await?;
     Ok(Account {
