@@ -4,6 +4,7 @@ import { User, Shield, Loader2, Lock, Eye, EyeOff, Zap, Trash2, Cpu, Package, La
 import { useAuthStore } from '@/stores/authStore';
 import { useInstanceStore, type SavedAccount } from '@/stores/instanceStore';
 import { AnimatedLogo } from '@/components/common/AnimatedLogo';
+import { SkinFace } from '@/components/common/SkinFace';
 
 export function LoginScreen() {
   const [mode, setMode] = useState<'select' | 'offline'>('select');
@@ -108,11 +109,13 @@ export function LoginScreen() {
                         whileHover={{ scale: 1.01, x: 3 }} whileTap={{ scale: 0.99 }}
                         onClick={() => handleQuickLogin(acc)}
                         className="w-full flex items-center gap-3 px-4 py-3 glass-card-hover cursor-pointer group">
-                        <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-primary-500 to-accent-500 flex items-center justify-center shadow-md overflow-hidden shrink-0">
+                        <div className="shrink-0">
                           {acc.skinUrl ? (
-                            <img src={acc.skinUrl} alt={acc.username} className="w-full h-full object-cover" />
+                            <SkinFace src={acc.skinUrl} alt={acc.username} size={36} />
                           ) : (
-                            <span className="text-sm font-bold text-white">{acc.username.charAt(0).toUpperCase()}</span>
+                            <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-primary-500 to-accent-500 flex items-center justify-center shadow-md">
+                              <span className="text-sm font-bold text-white">{acc.username.charAt(0).toUpperCase()}</span>
+                            </div>
                           )}
                         </div>
                         <div className="flex-1 min-w-0">

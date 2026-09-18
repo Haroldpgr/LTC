@@ -382,11 +382,21 @@ fn jwt_claim_summary(token: &str) -> String {
 }
 
 fn ms_debug_log(endpoint: &str, status: &str, body: &str, uhs: &str, xsts_token: &str) {
+    // Solo metadatos públicos del token (nada secreto): forma y cabecera.
+    let segs: Vec<&str> = xsts_token.split('.').collect();
+    let head: String = segs
+        .first()
+        .and_then(|h| b64url_decode(h))
+        .and_then(|b| String::from_utf8(b).ok())
+        .unwrap_or_default();
     let line = serde_json::json!({
         "ts": chrono::Local::now().to_rfc3339(),
         "endpoint": endpoint,
         "status": status,
         "uhs": uhs,
+        "xsts_segments": segs.len(),
+        "xsts_len": xsts_token.len(),
+        "xsts_head": head.chars().take(200).collect::<String>(),
         "xsts_claims": jwt_claim_summary(xsts_token),
         "body": body.chars().take(1000).collect::<String>(),
     });
