@@ -9,6 +9,9 @@ pub struct AppConfig {
     pub auto_update: bool,
     #[serde(default, rename = "updateUrl")]
     pub update_url: String,
+    /// Token de GitHub del admin para publicar el pack de mods (no se muestra nunca).
+    #[serde(default, rename = "githubToken")]
+    pub github_token: String,
 }
 
 impl Default for AppConfig {
@@ -25,6 +28,7 @@ impl Default for AppConfig {
             // El admin puede cambiarla desde el panel (Info de update).
             update_url: "https://github.com/Haroldpgr/LTC/releases/latest/download/update.json"
                 .to_string(),
+            github_token: String::new(),
         }
     }
 }

@@ -140,10 +140,18 @@ impl InstanceConfig {
 pub struct Launcher;
 
 /// Pack oficial de mods del servidor: viene preconfigurado en cada
-/// instancia nueva y se sincroniza solo al darle a Jugar.
-/// El admin lo actualiza subiendo el zip a ese release (tag fijo).
-pub const DEFAULT_MODS_PACK_URL: &str =
-    "https://github.com/Haroldpgr/LTC/releases/download/mods-latest/mods.zip";
+/// instancia nueva y se sincroniza solo al abrir el launcher y al Jugar.
+/// El admin lo actualiza con el botón Publicar (sube el zip al release).
+pub const MODS_REPO: &str = "Haroldpgr/LTC";
+pub const MODS_RELEASE_TAG: &str = "mods-latest";
+pub const MODS_ASSET_NAME: &str = "mods.zip";
+
+pub fn default_mods_pack_url() -> String {
+    format!(
+        "https://github.com/{}/releases/download/{}/{}",
+        MODS_REPO, MODS_RELEASE_TAG, MODS_ASSET_NAME
+    )
+}
 
 impl Launcher {
     /// En Windows evita que los procesos hijo (java.exe es app de consola)

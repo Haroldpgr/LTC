@@ -498,7 +498,7 @@ pub fn clear_mods_source(
 
 #[tauri::command]
 pub fn get_default_mods_url() -> String {
-    crate::minecraft::launcher::DEFAULT_MODS_PACK_URL.to_string()
+    crate::minecraft::launcher::default_mods_pack_url()
 }
 
 #[tauri::command]
@@ -511,4 +511,212 @@ pub async fn sync_mods_source_now(
         inst_state.config.instances_dir.clone()
     };
     sync_mods_source_internal(&base, &instance_id, true).await
+}
+
+/// Guarda el token de GitHub del admin (para publicar el pack de mods).
+#[tauri::command]
+pub fn set_github_token(
+    token: String,
+    state: State<'_, Mutex<InstanceState>>,
+) -> Result<(), String> {
+    let mut state_lock = state.lock().map_err(|e| e.to_string())?;
+    state_lock.config.github_token = token.trim().to_string();
+    state_lock.config.save();
+    Ok(())
+}
+
+/// ¿Hay token configurado? (el token nunca se devuelve al frontend).
+#[tauri::command]
+pub fn has_github_token(state: State<'_, Mutex<InstanceState>>) -> Result<bool, String> {
+    let state_lock = state.lock().map_err(|e| e.to_string())?;
+    Ok(!state_lock.config.github_token.trim().is_empty())
+}
+
+/// Exporta los mods a un zip de nombre fijo (mods.zip), listo para publicar.
+fn export_pack_zip(base: &PathBuf, config: &InstanceConfig) -> Result<PathBuf, String> {
+    use std::io::Write;
+
+    let mods_dir = InstanceConfig::mods_dir(base, &config.id);
+    let out_dir = InstanceConfig::instance_dir(base, &config.id).join("mods-export");
+    std::fs::create_dir_all(&out_dir).map_err(|e| e.to_string())?;
+    let dest = out_dir.join(crate::minecraft::launcher::MODS_ASSET_NAME);
+
+    let file = std::fs::File::create(&dest).map_err(|e| e.to_string())?;
+    let mut zip = zip::ZipWriter::new(file);
+    let options =
+        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+
+    let mut count = 0u32;
+    if let Ok(entries) = std::fs::read_dir(&mods_dir) {
+        for entry in entries.flatten() {
+            let p = entry.path();
+            let name = p
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
+            if !name.ends_with(".jar") {
+                continue;
+            }
+            let data = std::fs::read(&p).map_err(|e| e.to_string())?;
+            zip.start_file(&name, options)
+                .map_err(|e| e.to_string())?;
+            zip.write_all(&data).map_err(|e| e.to_string())?;
+            count += 1;
+        }
+    }
+    zip.finish().map_err(|e| e.to_string())?;
+
+    if count == 0 {
+        let _ = std::fs::remove_file(&dest);
+        return Err("La instancia no tiene mods .jar para publicar.".to_string());
+    }
+    Ok(dest)
+}
+
+/// Publica el pack de mods: exporta el zip y lo sube al release de GitHub
+/// (creándolo si no existe, reemplazando el asset anterior).
+/// Devuelve la URL pública del pack. Después, a los usuarios les llega
+/// solo al abrir el launcher o al darle a Jugar.
+#[tauri::command]
+pub async fn publish_mods_pack(
+    instance_id: String,
+    state: State<'_, Mutex<InstanceState>>,
+) -> Result<String, String> {
+    use crate::minecraft::launcher::{MODS_ASSET_NAME, MODS_RELEASE_TAG, MODS_REPO};
+
+    let (base, token) = {
+        let state_lock = state.lock().map_err(|e| e.to_string())?;
+        (
+            state_lock.config.instances_dir.clone(),
+            state_lock.config.github_token.clone(),
+        )
+    };
+    if token.trim().is_empty() {
+        return Err("Falta el token de GitHub: configúralo en el Panel admin (Pack de mods) para publicar.".to_string());
+    }
+    let token = token.trim().to_string();
+
+    let mut config =
+        InstanceConfig::load(&base, &instance_id).ok_or("Instancia no encontrada")?;
+    let zip_path = export_pack_zip(&base, &config)?;
+
+    let client = reqwest::Client::builder()
+        .user_agent("LTC-Launcher")
+        .timeout(std::time::Duration::from_secs(180))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let auth = format!("Bearer {}", token);
+    let api = format!("https://api.github.com/repos/{}/releases", MODS_REPO);
+
+    // 1. Buscar el release por tag; si no existe, crearlo.
+    let tag_url = format!("{}/tags/{}", api, MODS_RELEASE_TAG);
+    let resp = client
+        .get(&tag_url)
+        .header("Authorization", &auth)
+        .header("Accept", "application/vnd.github+json")
+        .send()
+        .await
+        .map_err(|e| format!("GitHub no responde: {}", e))?;
+    let release: serde_json::Value = if resp.status() == reqwest::StatusCode::NOT_FOUND {
+        let created = client
+            .post(&api)
+            .header("Authorization", &auth)
+            .header("Accept", "application/vnd.github+json")
+            .json(&serde_json::json!({
+                "tag_name": MODS_RELEASE_TAG,
+                "name": "Pack de mods",
+                "body": "Pack oficial de mods del servidor. Se actualiza solo en el launcher.",
+                "draft": false,
+                "prerelease": false,
+            }))
+            .send()
+            .await
+            .map_err(|e| format!("No se pudo crear el release: {}", e))?;
+        let status = created.status();
+        let body: serde_json::Value = created.json().await.unwrap_or_default();
+        if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
+            return Err("Token inválido o sin permisos: necesita acceso de escritura al repo (scope repo o Contents: read+write).".to_string());
+        }
+        if !status.is_success() {
+            return Err(format!(
+                "GitHub rechazó crear el release ({}): {}",
+                status,
+                body.get("message").and_then(|m| m.as_str()).unwrap_or("")
+            ));
+        }
+        body
+    } else if resp.status() == reqwest::StatusCode::UNAUTHORIZED
+        || resp.status() == reqwest::StatusCode::FORBIDDEN
+    {
+        return Err("Token inválido o sin permisos: necesita acceso de escritura al repo (scope repo o Contents: read+write).".to_string());
+    } else {
+        resp.json()
+            .await
+            .map_err(|e| format!("Respuesta inesperada de GitHub: {}", e))?
+    };
+
+    let upload_tpl = release
+        .get("upload_url")
+        .and_then(|u| u.as_str())
+        .ok_or("GitHub no devolvió URL de subida.")?
+        .to_string();
+
+    // 2. Borrar el asset anterior con el mismo nombre (si existe).
+    if let Some(assets) = release.get("assets").and_then(|a| a.as_array()) {
+        for a in assets {
+            let name = a.get("name").and_then(|n| n.as_str()).unwrap_or("");
+            let id = a.get("id").and_then(|i| i.as_u64()).unwrap_or(0);
+            if name == MODS_ASSET_NAME && id != 0 {
+                let del_url = format!("https://api.github.com/repos/{}/releases/assets/{}", MODS_REPO, id);
+                let _ = client
+                    .delete(&del_url)
+                    .header("Authorization", &auth)
+                    .header("Accept", "application/vnd.github+json")
+                    .send()
+                    .await;
+            }
+        }
+    }
+
+    // 3. Subir el zip (stream desde disco + longitud explícita).
+    let upload_url = upload_tpl.replace("{?name,label}", &format!("?name={}", MODS_ASSET_NAME));
+    let meta = std::fs::metadata(&zip_path).map_err(|e| e.to_string())?;
+    let file = tokio::fs::File::open(&zip_path)
+        .await
+        .map_err(|e| e.to_string())?;
+    let up_resp = client
+        .post(&upload_url)
+        .header("Authorization", &auth)
+        .header("Accept", "application/vnd.github+json")
+        .header("Content-Type", "application/zip")
+        .header("Content-Length", meta.len())
+        .body(reqwest::Body::from(file))
+        .send()
+        .await
+        .map_err(|e| format!("Falló la subida: {}", e))?;
+    let up_status = up_resp.status();
+    let up_body: serde_json::Value = up_resp.json().await.unwrap_or_default();
+    if !up_status.is_success() {
+        return Err(format!(
+            "GitHub rechazó el archivo ({}): {}",
+            up_status,
+            up_body.get("message").and_then(|m| m.as_str()).unwrap_or("")
+        ));
+    }
+    let public_url = up_body
+        .get("browser_download_url")
+        .and_then(|u| u.as_str())
+        .unwrap_or(&crate::minecraft::launcher::default_mods_pack_url())
+        .to_string();
+
+    // 4. Dejar la instancia del admin al día para no re-sincronizarla.
+    let hash = Launcher::hash_file(&zip_path)?;
+    if let Some(mut src) = config.mods_source.take() {
+        src.fingerprint = hash;
+        src.synced_at = chrono::Utc::now().to_rfc3339();
+        config.mods_source = Some(src);
+        config.save(&base)?;
+    }
+
+    Ok(public_url)
 }

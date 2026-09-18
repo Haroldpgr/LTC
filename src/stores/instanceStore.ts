@@ -38,6 +38,8 @@ interface InstanceStore {
   setModsSourceUrl: (instanceId: string, url: string) => Promise<void>;
   clearModsSource: (instanceId: string) => Promise<void>;
   syncModsSource: (instanceId: string) => Promise<boolean>;
+  syncOfficialSources: () => Promise<number>;
+  publishModsPack: (instanceId: string) => Promise<string>;
 }
 
 export interface SavedAccount {
@@ -243,6 +245,31 @@ export const useInstanceStore = create<InstanceStore>((set, get) => {
       const changed = await invoke<boolean>('sync_mods_source_now', { instanceId });
       await get().loadInstances();
       return changed;
+    },
+    syncOfficialSources: async () => {
+      // Al abrir el launcher: sincroniza en silencio todas las instancias
+      // con fuente por URL. Así los mods publicados por el admin aparecen
+      // sin que el usuario tenga que hacer nada. Devuelve cuántas cambiaron.
+      const { instances } = get();
+      let changed = 0;
+      for (const inst of instances) {
+        if (inst.modsSource?.type === 'archive' && inst.modsSource.archiveUrl) {
+          try {
+            if (await invoke<boolean>('sync_mods_source_now', { instanceId: inst.id })) {
+              changed += 1;
+            }
+          } catch {
+            // Sin red o sin pack todavía: se ignora en el arranque.
+          }
+        }
+      }
+      await get().loadInstances();
+      return changed;
+    },
+    publishModsPack: async (instanceId) => {
+      const url = await invoke<string>('publish_mods_pack', { instanceId });
+      await get().loadInstances();
+      return url;
     },
   };
 });

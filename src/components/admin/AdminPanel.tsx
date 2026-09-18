@@ -71,7 +71,7 @@ function getLoaderVersion(loader: string, mcVersion: string): string {
 }
 
 export function AdminPanel() {
-  const { instances, createInstance, updateInstance, deleteInstance, addModToLocal, removeMod, adminLogout } = useInstanceStore();
+  const { instances, createInstance, updateInstance, deleteInstance, addModToLocal, removeMod, adminLogout, publishModsPack } = useInstanceStore();
   const [tab, setTab] = useState<Tab>('instances');
   const [editingInstance, setEditingInstance] = useState<ModpackInstance | null>(null);
   const [iconError, setIconError] = useState('');
@@ -81,6 +81,9 @@ export function AdminPanel() {
   const [exportingId, setExportingId] = useState<string | null>(null);
   const [appVersion, setAppVersion] = useState('');
   const [updateUrl, setUpdateUrl] = useState('');
+  const [githubToken, setGithubToken] = useState('');
+  const [tokenMsg, setTokenMsg] = useState('');
+  const [tokenReady, setTokenReady] = useState(false);
   const [updateCheck, setUpdateCheck] = useState('');
   const [checkingUpdate, setCheckingUpdate] = useState(false);
   const [form, setForm] = useState({
@@ -199,8 +202,8 @@ export function AdminPanel() {
     setExportMsg('');
     setExportingId(instanceId);
     try {
-      const path = await invoke<string>('export_mods_archive', { instanceId });
-      setExportMsg(`Pack exportado: ${path}. Súbelo como mods.zip al release de tag mods-latest y les llegará solo a todos al darle a Jugar.`);
+      const url = await publishModsPack(instanceId);
+      setExportMsg(`Pack publicado. Ya les llega solo a todos al abrir el launcher o darle a Jugar: ${url}`);
     } catch (e) {
       setExportMsg(String(e));
     }
@@ -214,6 +217,9 @@ export function AdminPanel() {
     try {
       setUpdateUrl(await invoke<string>('get_update_url'));
     } catch { /* noop */ }
+    try {
+      setTokenReady(await invoke<boolean>('has_github_token'));
+    } catch { /* noop */ }
   };
 
   const handleSaveUpdateUrl = async () => {
@@ -222,6 +228,22 @@ export function AdminPanel() {
       setUpdateCheck('URL de actualizaciones guardada.');
     } catch (e) {
       setUpdateCheck(String(e));
+    }
+  };
+
+  const handleSaveToken = async () => {
+    setTokenMsg('');
+    if (!githubToken.trim()) {
+      setTokenMsg('Pega primero el token.');
+      return;
+    }
+    try {
+      await invoke('set_github_token', { token: githubToken.trim() });
+      setGithubToken('');
+      setTokenReady(true);
+      setTokenMsg('Token guardado. Ya puedes publicar con un clic.');
+    } catch (e) {
+      setTokenMsg(String(e));
     }
   };
 
@@ -319,9 +341,9 @@ export function AdminPanel() {
                       </motion.button>
                       <motion.button whileTap={{ scale: 0.9 }} onClick={() => handleExportPack(inst.id)}
                         disabled={exportingId === inst.id}
-                        title="Exportar los mods a un zip para compartirlo como Fuente de mods"
+                        title="Publicar los mods: los sube al pack oficial y les llegan solos a todos"
                         className="btn-secondary text-xs flex items-center gap-1 py-1.5 px-3 disabled:opacity-50">
-                        <Share2 size={12} /> {exportingId === inst.id ? 'Exportando...' : 'Publicar'}
+                        <Share2 size={12} /> {exportingId === inst.id ? 'Publicando...' : 'Publicar'}
                       </motion.button>
                       <motion.button whileTap={{ scale: 0.9 }} onClick={() => handleEdit(inst)} className="btn-ghost p-2">
                         <Edit3 size={15} />
@@ -402,13 +424,28 @@ export function AdminPanel() {
               </div>
 
               <div className="glass-card p-5">
-                <h4 className="text-sm font-semibold text-white mb-2">Sincronizar mods con los usuarios</h4>
-                <p className="text-xs text-dark-400 leading-relaxed">
-                  Usa <span className="text-primary-300 font-medium">Publicar</span> en una instancia para exportar sus mods a un zip llamado <span className="font-mono">mods.zip</span>.
-                  Súbelo al release de tag <span className="font-mono">mods-latest</span> de tu repo (créalo una vez; después reemplaza el archivo).
-                  Todas las instancias nuevas ya vienen conectadas a ese pack oficial: al darle a Jugar se les instalan los nuevos, se les borran los eliminados y se actualizan los cambiados, sin pegar ningún enlace.
-                  Importante: sube el zip ANTES de darle a Jugar en tu instancia de autor, o quita su fuente, para no revertir tus cambios sin publicar.
+                <h4 className="text-sm font-semibold text-white mb-2">Pack oficial de mods (publicar con un clic)</h4>
+                <p className="text-xs text-dark-400 leading-relaxed mb-3">
+                  Añade o quita mods en tu instancia y pulsa <span className="text-primary-300 font-medium">Publicar</span>:
+                  el launcher los sube solo al pack oficial y a los usuarios les aparecen al abrir el launcher o al darle a Jugar,
+                  sin pegar enlaces ni hacer nada más. Para publicar una sola vez necesitas un token de GitHub
+                  (github.com → Settings → Developer settings → Personal access tokens → Tokens (classic) → Generate,
+                  con permiso <span className="font-mono">repo</span>). Solo se guarda en tu PC.
                 </p>
+                <div className="flex flex-col md:flex-row gap-2">
+                  <input
+                    type="password"
+                    value={githubToken}
+                    onChange={(e) => setGithubToken(e.target.value)}
+                    placeholder={tokenReady ? 'Token configurado (pégalo de nuevo para cambiarlo)' : 'Pega aquí tu token de GitHub'}
+                    className="input-field text-xs font-mono flex-1"
+                  />
+                  <motion.button whileTap={{ scale: 0.97 }} onClick={handleSaveToken} className="btn-primary text-xs flex items-center gap-2 shrink-0">
+                    <Save size={13} /> Guardar token
+                  </motion.button>
+                </div>
+                {tokenMsg && <p className="text-xs text-primary-300 mt-2">{tokenMsg}</p>}
+                {tokenReady && !tokenMsg && <p className="text-xs text-emerald-400 mt-2">Publicación activada.</p>}
               </div>
             </motion.div>
           )}
