@@ -21,7 +21,10 @@ impl Default for AppConfig {
             admin_password_hash: String::new(),
             curseforge_api_key: "$2a$10$8qrneNohy/pV0jJKZVbUuu.kXuDwlRmfhnf4o.7VGEN/bEjXTOPWC".to_string(),
             auto_update: true,
-            update_url: String::new(),
+            // URL por defecto: el update.json del último release de GitHub.
+            // El admin puede cambiarla desde el panel (Info de update).
+            update_url: "https://github.com/Haroldpgr/LTC/releases/latest/download/update.json"
+                .to_string(),
         }
     }
 }
