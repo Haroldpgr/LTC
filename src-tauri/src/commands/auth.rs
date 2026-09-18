@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::{AppHandle, State};
-use tauri_plugin_shell::ShellExt;
+use tauri_plugin_opener::OpenerExt;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use uuid::Uuid;
 
@@ -23,7 +23,14 @@ pub struct Account {
 }
 
 // App de Azure del usuario (LTC): flujo Authorization Code + localhost.
-const MS_CLIENT_ID: &str = "116308a7-06ac-4420-b26d-1ee6f933165e";
+// Diagnóstico: definir la variable de entorno LTC_MS_CLIENT_ID permite probar
+// temporalmente con otro Client ID sin recompilar otro binario.
+fn ms_client_id() -> String {
+    std::env::var("LTC_MS_CLIENT_ID")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| "116308a7-06ac-4420-b26d-1ee6f933165e".to_string())
+}
 const MS_REDIRECT_URI: &str = "http://localhost:1653";
 const MS_SCOPE: &str = "XboxLive.SignIn XboxLive.offline_access";
 
@@ -136,7 +143,7 @@ async fn ms_exchange_code(raw_code: &str) -> Result<(String, Option<String>), St
         .map(|s| s.into_owned())
         .unwrap_or_else(|_| raw_code.to_string());
     let params = [
-        ("client_id", MS_CLIENT_ID.to_string()),
+        ("client_id", ms_client_id()),
         ("code", code),
         ("grant_type", "authorization_code".to_string()),
         ("redirect_uri", MS_REDIRECT_URI.to_string()),
@@ -176,7 +183,7 @@ async fn ms_exchange_code(raw_code: &str) -> Result<(String, Option<String>), St
 
 async fn ms_refresh(refresh_token: &str) -> Result<(String, Option<String>), String> {
     let params = [
-        ("client_id", MS_CLIENT_ID.to_string()),
+        ("client_id", ms_client_id()),
         ("refresh_token", refresh_token.to_string()),
         ("grant_type", "refresh_token".to_string()),
         ("scope", MS_SCOPE.to_string()),
@@ -517,13 +524,13 @@ pub async fn login_microsoft(
     // 1. Abrir el navegador con tu app de Azure (LTC)
     let auth_url = format!(
         "https://login.microsoftonline.com/consumers/oauth2/v2.0/authorize?client_id={}&response_type=code&redirect_uri={}&response_mode=query&scope={}&prompt=select_account",
-        MS_CLIENT_ID,
+        ms_client_id(),
         urlencoding::encode(MS_REDIRECT_URI),
         urlencoding::encode(MS_SCOPE),
     );
     app_handle
-        .shell()
-        .open(&auth_url, None)
+        .opener()
+        .open_url(&auth_url, None::<&str>)
         .map_err(|e| format!("No se pudo abrir el navegador: {}", e))?;
 
     // 2. Esperar el callback en http://localhost:1653
