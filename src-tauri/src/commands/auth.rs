@@ -216,6 +216,8 @@ struct XblClaims {
 #[derive(Debug, Deserialize)]
 struct XblXui {
     uhs: String,
+    #[serde(default)]
+    gtg: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -237,7 +239,7 @@ fn xsts_error(xerr: i64) -> String {
     }
 }
 
-async fn xbox_login(ms_access_token: &str) -> Result<(String, String), String> {
+async fn xbox_login(ms_access_token: &str) -> Result<(String, String, Option<String>), String> {
     // 1. Xbox Live
     let xbl: XblResponse = ms_http()
         .post("https://user.auth.xboxlive.com/user/authenticate")
@@ -287,17 +289,19 @@ async fn xbox_login(ms_access_token: &str) -> Result<(String, String), String> {
     }
     let token = xsts.token.ok_or("XSTS no devolvió token.")?;
     // Verificación cruzada como Prism: el uhs del XSTS debe coincidir con el de Xbox.
-    if let Some(xsts_uhs) = xsts
+    // Además se captura el gamertag para el log de diagnóstico.
+    let mut gtg: Option<String> = None;
+    if let Some(x) = xsts
         .display_claims
         .as_ref()
         .and_then(|c| c.xui.first())
-        .map(|x| x.uhs.clone())
     {
-        if xsts_uhs != uhs {
+        if x.uhs != uhs {
             return Err("Xbox devolvió identidades inconsistentes (uhs distinto). Reintenta el login.".to_string());
         }
+        gtg = x.gtg.clone();
     }
-    Ok((uhs, token))
+    Ok((uhs, token, gtg))
 }
 
 #[derive(Debug, Deserialize)]
@@ -381,7 +385,14 @@ fn jwt_claim_summary(token: &str) -> String {
     format!("claims[{}]", keys.join(","))
 }
 
-fn ms_debug_log(endpoint: &str, status: &str, body: &str, uhs: &str, xsts_token: &str) {
+fn ms_debug_log(
+    endpoint: &str,
+    status: &str,
+    body: &str,
+    uhs: &str,
+    xsts_token: &str,
+    gamertag: Option<&str>,
+) {
     // Solo metadatos públicos del token (nada secreto): forma y cabecera.
     let segs: Vec<&str> = xsts_token.split('.').collect();
     let head: String = segs
@@ -394,6 +405,7 @@ fn ms_debug_log(endpoint: &str, status: &str, body: &str, uhs: &str, xsts_token:
         "endpoint": endpoint,
         "status": status,
         "uhs": uhs,
+        "gamertag": gamertag,
         "xsts_segments": segs.len(),
         "xsts_len": xsts_token.len(),
         "xsts_head": head.chars().take(200).collect::<String>(),
@@ -419,7 +431,11 @@ fn ms_debug_log(endpoint: &str, status: &str, body: &str, uhs: &str, xsts_token:
 /// Intercambia Xbox (uhs + xsts) por token de Minecraft + perfil (nombre, uuid, skin).
 /// Usa el endpoint de launchers (/launcher/login) como Prism y cía., con
 /// fallback al clásico (/authentication/login_with_xbox).
-async fn minecraft_login(uhs: &str, xsts_token: &str) -> Result<(String, String, String, Option<String>), String> {
+async fn minecraft_login(
+    uhs: &str,
+    xsts_token: &str,
+    gamertag: Option<&str>,
+) -> Result<(String, String, String, Option<String>), String> {
     let xtoken = format!("XBL3.0 x={};{}", uhs, xsts_token);
     let mut first_err = String::new();
     let mut last_err = String::new();
@@ -443,18 +459,18 @@ async fn minecraft_login(uhs: &str, xsts_token: &str) -> Result<(String, String,
                 }
                 if mc_token.is_none() {
                     first_err = "Respuesta sin access_token en /launcher/login".to_string();
-                    ms_debug_log("/launcher/login", "200-sin-token", &first_err, uhs, xsts_token);
+                    ms_debug_log("/launcher/login", "200-sin-token", &first_err, uhs, xsts_token, gamertag);
                 }
             } else {
                 let status = resp.status();
                 let body = resp.text().await.unwrap_or_default();
                 first_err = format!("HTTP {}: {}", status, body.chars().take(300).collect::<String>());
-                ms_debug_log("/launcher/login", &status.to_string(), &body, uhs, xsts_token);
+                ms_debug_log("/launcher/login", &status.to_string(), &body, uhs, xsts_token, gamertag);
             }
         }
         Err(e) => {
             first_err = format!("Error con Minecraft Services: {}", e);
-            ms_debug_log("/launcher/login", "network-error", &first_err, uhs, xsts_token);
+            ms_debug_log("/launcher/login", "network-error", &first_err, uhs, xsts_token, gamertag);
         }
     }
 
@@ -475,18 +491,18 @@ async fn minecraft_login(uhs: &str, xsts_token: &str) -> Result<(String, String,
                     }
                     if mc_token.is_none() {
                         last_err = "Respuesta sin access_token en login_with_xbox".to_string();
-                        ms_debug_log("/authentication/login_with_xbox", "200-sin-token", &last_err, uhs, xsts_token);
+                        ms_debug_log("/authentication/login_with_xbox", "200-sin-token", &last_err, uhs, xsts_token, gamertag);
                     }
                 } else {
                     let status = resp.status();
                     let body = resp.text().await.unwrap_or_default();
                     last_err = format!("HTTP {}: {}", status, body.chars().take(300).collect::<String>());
-                    ms_debug_log("/authentication/login_with_xbox", &status.to_string(), &body, uhs, xsts_token);
+                    ms_debug_log("/authentication/login_with_xbox", &status.to_string(), &body, uhs, xsts_token, gamertag);
                 }
             }
             Err(e) => {
                 last_err = format!("Error con Minecraft Services: {}", e);
-                ms_debug_log("/authentication/login_with_xbox", "network-error", &last_err, uhs, xsts_token);
+                ms_debug_log("/authentication/login_with_xbox", "network-error", &last_err, uhs, xsts_token, gamertag);
             }
         }
     }
@@ -542,8 +558,8 @@ async fn build_microsoft_account(
     ms_access_token: &str,
     refresh_token: Option<String>,
 ) -> Result<Account, String> {
-    let (uhs, xsts) = xbox_login(ms_access_token).await?;
-    let (mc_token, uuid, name, skin) = minecraft_login(&uhs, &xsts).await?;
+    let (uhs, xsts, gtg) = xbox_login(ms_access_token).await?;
+    let (mc_token, uuid, name, skin) = minecraft_login(&uhs, &xsts, gtg.as_deref()).await?;
     Ok(Account {
         account_type: "microsoft".to_string(),
         username: name,
