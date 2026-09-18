@@ -85,7 +85,14 @@ for ($try = 1; $try -le $MaxTries; $try++) {
     }
   }
 
-  # 3. Otro error: mostrar cola y salir
+  # 3. ¿Timeout de red del bundler (ej. descarga de NSIS)? -> reintentar
+  if ($logText -match 'failed to bundle project|timeout: global|Downloading https://github.com/tauri-apps/binary-releases') {
+    Write-Host "[build] Fallo de red del empaquetador (timeout), reintentando en 5s..."
+    Start-Sleep -Seconds 5
+    continue
+  }
+
+  # 4. Otro error: mostrar cola y salir
   Write-Host ""
   Write-Host "[build] ❌ Falló por otro motivo. Últimas líneas:"
   Get-Content $log -Tail 25
