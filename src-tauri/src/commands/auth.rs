@@ -25,7 +25,7 @@ pub struct Account {
 // App de Azure del usuario (LTC): flujo Authorization Code + localhost.
 const MS_CLIENT_ID: &str = "116308a7-06ac-4420-b26d-1ee6f933165e";
 const MS_REDIRECT_URI: &str = "http://localhost:1653";
-const MS_SCOPE: &str = "XboxLive.signin offline_access";
+const MS_SCOPE: &str = "XboxLive.SignIn XboxLive.offline_access";
 
 fn ms_http() -> reqwest::Client {
     reqwest::Client::builder()
@@ -198,6 +198,7 @@ async fn xbox_login(ms_access_token: &str) -> Result<(String, String), String> {
     // 1. Xbox Live
     let xbl: XblResponse = ms_http()
         .post("https://user.auth.xboxlive.com/user/authenticate")
+        .header("x-xbl-contract-version", "1")
         .json(&serde_json::json!({
             "Properties": {
                 "AuthMethod": "RPS",
@@ -223,6 +224,7 @@ async fn xbox_login(ms_access_token: &str) -> Result<(String, String), String> {
     // 2. XSTS para Minecraft
     let xsts: XstsResponse = ms_http()
         .post("https://xsts.auth.xboxlive.com/xsts/authorize")
+        .header("x-xbl-contract-version", "1")
         .json(&serde_json::json!({
             "Properties": {
                 "SandboxId": "RETAIL",
@@ -260,50 +262,79 @@ struct McProfile {
     skins: Vec<McProfileSkin>,
 }
 
+/// Extrae access_token de una respuesta JSON de Minecraft Services.
+fn extract_mc_token(v: &serde_json::Value) -> Option<String> {
+    v.get("access_token")
+        .and_then(|t| t.as_str())
+        .map(|s| s.to_string())
+}
+
 /// Intercambia Xbox (uhs + xsts) por token de Minecraft + perfil (nombre, uuid, skin).
+/// Usa el endpoint de launchers (/launcher/login) como Prism y cía., con
+/// fallback al clásico (/authentication/login_with_xbox).
 async fn minecraft_login(uhs: &str, xsts_token: &str) -> Result<(String, String, String, Option<String>), String> {
-    #[derive(Debug, Deserialize)]
-    struct McToken {
-        access_token: String,
-    }
-    // login_with_xbox a veces falla de forma transitoria: un reintento.
+    let xtoken = format!("XBL3.0 x={};{}", uhs, xsts_token);
     let mut last_err = String::new();
-    let mut login_resp = None;
-    for attempt in 1..=2 {
+    let mut mc_token: Option<String> = None;
+
+    // Intento 1: endpoint de launchers (PC_LAUNCHER)
+    match ms_http()
+        .post("https://api.minecraftservices.com/launcher/login")
+        .json(&serde_json::json!({
+            "xtoken": xtoken,
+            "platform": "PC_LAUNCHER",
+        }))
+        .send()
+        .await
+    {
+        Ok(resp) => {
+            if resp.status().is_success() {
+                if let Ok(v) = resp.json::<serde_json::Value>().await {
+                    mc_token = extract_mc_token(&v);
+                }
+                if mc_token.is_none() {
+                    last_err = "Respuesta sin access_token en /launcher/login".to_string();
+                }
+            } else {
+                let body = resp.text().await.unwrap_or_default();
+                last_err = body.chars().take(300).collect::<String>();
+            }
+        }
+        Err(e) => {
+            last_err = format!("Error con Minecraft Services: {}", e);
+        }
+    }
+
+    // Intento 2 (fallback): endpoint clásico
+    if mc_token.is_none() {
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
         match ms_http()
             .post("https://api.minecraftservices.com/authentication/login_with_xbox")
-            .json(&serde_json::json!({
-                "identityToken": format!("XBL3.0 x={};{}", uhs, xsts_token),
-            }))
+            .json(&serde_json::json!({ "identityToken": xtoken }))
             .send()
             .await
         {
             Ok(resp) => {
                 if resp.status().is_success() {
-                    login_resp = Some(resp);
-                    break;
-                }
-                let status = resp.status();
-                let body = resp.text().await.unwrap_or_default();
-                last_err = body.chars().take(300).collect::<String>();
-                // Solo reintentar errores temporales del servidor
-                if !(status == reqwest::StatusCode::TOO_MANY_REQUESTS || status.is_server_error()) {
-                    break;
-                }
-                if attempt < 2 {
-                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                    if let Ok(v) = resp.json::<serde_json::Value>().await {
+                        mc_token = extract_mc_token(&v);
+                    }
+                    if mc_token.is_none() {
+                        last_err = "Respuesta sin access_token en login_with_xbox".to_string();
+                    }
+                } else {
+                    let body = resp.text().await.unwrap_or_default();
+                    last_err = body.chars().take(300).collect::<String>();
                 }
             }
             Err(e) => {
                 last_err = format!("Error con Minecraft Services: {}", e);
-                if attempt < 2 {
-                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-                }
             }
         }
     }
-    let login_resp = match login_resp {
-        Some(r) => r,
+
+    let mc_token = match mc_token {
+        Some(t) => t,
         None => {
             if last_err.contains("NOT_FOUND")
                 || last_err.contains("No Minecraft account")
@@ -311,23 +342,15 @@ async fn minecraft_login(uhs: &str, xsts_token: &str) -> Result<(String, String,
             {
                 return Err("Esta cuenta Microsoft no tiene Minecraft: Java Edition comprado o vinculado.".to_string());
             }
-            if last_err.contains("Invalid app registration") {
-                return Err("Mojang no aceptó el inicio de sesión (registro de app inválido). Esto pasa cuando la cuenta NO tiene Java Edition: el Game Pass de CONSOLA no incluye Java, necesitas PC Game Pass o Ultimate activo, y entrar con la cuenta personal que tiene la suscripción (no la del trabajo/escuela).".to_string());
-            }
-            return Err(format!(
-                "Minecraft Services rechazó el login: {}",
-                last_err.chars().take(200).collect::<String>()
-            ));
+            let detail: String = last_err.chars().take(500).collect();
+            return Err(format!("Minecraft Services rechazó el login: {}", detail));
         }
     };
-    let tok: McToken = login_resp
-        .json()
-        .await
-        .map_err(|e| format!("Respuesta inválida de Minecraft Services: {}", e))?;
+    let tok = mc_token;
 
     let profile_resp = ms_http()
         .get("https://api.minecraftservices.com/minecraft/profile")
-        .bearer_auth(&tok.access_token)
+        .bearer_auth(&tok)
         .send()
         .await
         .map_err(|e| format!("Error obteniendo perfil: {}", e))?;
@@ -349,7 +372,7 @@ async fn minecraft_login(uhs: &str, xsts_token: &str) -> Result<(String, String,
         .find(|s| s.state.as_deref() == Some("ACTIVE"))
         .or_else(|| profile.skins.first());
     Ok((
-        tok.access_token,
+        tok,
         profile.id,
         profile.name,
         skin.and_then(|s| s.url.clone()),
