@@ -955,16 +955,131 @@ pub async fn default_skin_dataurl(username: String, uuid: Option<String>) -> Res
     Ok(format!("data:image/png;base64,{}", b64_encode(&bytes)))
 }
 
+fn valid_offline_name(name: &str) -> Result<String, String> {
+    let n = name.trim().to_string();
+    if n.len() < 3 || n.len() > 16 {
+        return Err("El nombre debe tener entre 3 y 16 caracteres.".to_string());
+    }
+    if !n.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        return Err("Solo letras, números y guion bajo.".to_string());
+    }
+    Ok(n)
+}
+
+fn local_name_taken(name: &str) -> bool {
+    get_saved_accounts()
+        .iter()
+        .any(|a| a.username.eq_ignore_ascii_case(name))
+}
+
+/// ¿Existe una cuenta premium de Mojang con ese nombre? (200 = sí).
+/// Si no hay red, se permite (fail-open).
+async fn premium_name_taken(name: &str) -> bool {
+    let Ok(client) = reqwest::Client::builder()
+        .user_agent("LTC-Launcher")
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+    else {
+        return false;
+    };
+    let url = format!(
+        "https://api.minecraftservices.com/minecraft/profile/lookup/name/{}",
+        name
+    );
+    match client.get(&url).send().await {
+        Ok(resp) => resp.status().is_success(),
+        Err(_) => false,
+    }
+}
+
+/// Reserva global del nombre en Supabase (tabla username_claims).
+/// Ok = libre, ya era tuyo, o sin conexión/config (fail-open).
+/// Err = en uso por otro jugador.
+async fn claim_username_global(name: &str, uuid: &str) -> Result<(), String> {
+    let cfg = crate::config::AppConfig::load();
+    let url = cfg.supabase_url.trim().to_string();
+    let anon = cfg.supabase_anon_key.trim().to_string();
+    if url.is_empty() || anon.is_empty() {
+        return Ok(());
+    }
+    let base = url.trim_end_matches('/');
+    let Ok(client) = reqwest::Client::builder()
+        .user_agent("LTC-Launcher")
+        .timeout(std::time::Duration::from_secs(12))
+        .build()
+    else {
+        return Ok(());
+    };
+    let resp = client
+        .post(format!("{}/rest/v1/username_claims", base))
+        .header("apikey", &anon)
+        .header("Authorization", format!("Bearer {}", anon))
+        .header("Content-Type", "application/json")
+        .json(&serde_json::json!({ "username": name.to_lowercase(), "uuid": uuid }))
+        .send()
+        .await;
+    let Ok(resp) = resp else { return Ok(()) };
+    if resp.status().is_success() {
+        return Ok(());
+    }
+    if resp.status() == reqwest::StatusCode::CONFLICT {
+        // En uso: ¿eres tú (mismo uuid)?
+        let get_url = format!(
+            "{}/rest/v1/username_claims?username=eq.{}&select=uuid",
+            base,
+            name.to_lowercase()
+        );
+        if let Ok(gr) = client
+            .get(&get_url)
+            .header("apikey", &anon)
+            .header("Authorization", format!("Bearer {}", anon))
+            .send()
+            .await
+        {
+            if let Ok(rows) = gr.json::<Vec<serde_json::Value>>().await {
+                if rows
+                    .first()
+                    .and_then(|r| r.get("uuid"))
+                    .and_then(|u| u.as_str())
+                    == Some(uuid)
+                {
+                    return Ok(());
+                }
+            }
+        }
+        return Err("Ese nombre ya está en uso por otro jugador.".to_string());
+    }
+    // Otros errores (RLS, tabla ausente...): no bloquear la entrada.
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn login_offline(
     username: String,
     state: State<'_, Mutex<AuthState>>,
 ) -> Result<Account, String> {
-    if username.is_empty() || username.len() > 16 {
-        return Err("El nombre debe tener entre 1 y 16 caracteres".to_string());
+    // Cuenta ya guardada en este PC: entrada directa sin revalidar
+    // (respeta cuentas creadas antes de estas reglas).
+    let username = username.trim().to_string();
+    if !local_name_taken(&username) {
+        let username = valid_offline_name(&username)?;
+        if premium_name_taken(&username).await {
+            return Err("Ese nombre pertenece a una cuenta premium. Usa otro nombre.".to_string());
+        }
+        let uuid = offline_uuid(&username);
+        claim_username_global(&username, &uuid).await?;
+        return login_offline_account(username, uuid, state).await;
     }
 
     let uuid = offline_uuid(&username);
+    login_offline_account(username, uuid, state).await
+}
+
+async fn login_offline_account(
+    username: String,
+    uuid: String,
+    state: State<'_, Mutex<AuthState>>,
+) -> Result<Account, String> {
     let account = Account {
         account_type: "offline".to_string(),
         username,

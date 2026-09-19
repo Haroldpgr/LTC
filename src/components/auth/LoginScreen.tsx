@@ -85,8 +85,12 @@ export function LoginScreen() {
     } catch {}
   };
 
+  const nameTakenLocal = savedAccounts.some(
+    (a) => a.username.toLowerCase() === offlineName.trim().toLowerCase()
+  ) && offlineName.trim().length > 0;
+
   const canSubmit = offlineName.trim().length > 0 && offlinePassword.trim().length >= 4 &&
-    offlinePassword === confirmPassword && savedAccounts.length < 3;
+    offlinePassword === confirmPassword && savedAccounts.length < 3 && !nameTakenLocal;
 
   const particles = Array.from({ length: 15 }, (_, i) => ({
     id: i, x: Math.random() * 100, y: Math.random() * 100,
@@ -233,6 +237,10 @@ export function LoginScreen() {
                     <input type="text" value={offlineName} onChange={(e) => setOfflineName(e.target.value)}
                       placeholder="Tu nombre..." className="input-field pl-10" maxLength={16} autoFocus />
                   </div>
+                  {nameTakenLocal && (
+                    <p className="text-amber-400 text-xs mt-1 ml-1">Ya tienes esa cuenta: selecciónala en la lista.</p>
+                  )}
+                  <p className="text-dark-500 text-[10px] mt-1 ml-1">3-16 caracteres (letras, números, _). Los nombres premium están reservados y no se pueden repetir.</p>
                 </div>
                 <div>
                   <label className="block text-xs font-medium text-dark-400 mb-1.5 ml-1">Contraseña</label>

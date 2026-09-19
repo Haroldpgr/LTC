@@ -394,6 +394,14 @@ pub(crate) async fn sync_mods_source_internal(
         return Ok(false);
     }
 
+    // Foto de activados/desactivados para reaplicarla tras copiar el pack
+    // (el pack trae todos como .jar; el estado viaja en el catálogo).
+    let enabled_map: std::collections::HashMap<String, bool> = config
+        .mods
+        .iter()
+        .map(|m| (m.filename.clone(), m.enabled))
+        .collect();
+
     let mods_dir = InstanceConfig::mods_dir(base, instance_id);
     std::fs::create_dir_all(&mods_dir).map_err(|e| e.to_string())?;
     wipe_mods(&mods_dir);
@@ -413,6 +421,18 @@ pub(crate) async fn sync_mods_source_internal(
         let result = copy_jars_from_tree(&staging, &mods_dir, &mut config);
         let _ = std::fs::remove_dir_all(&staging);
         result?;
+    }
+
+    // Reaplicar desactivados del catálogo (quedan como .jar.disabled).
+    for m in config.mods.iter_mut() {
+        if !enabled_map.get(&m.filename).copied().unwrap_or(true) {
+            m.enabled = false;
+            let src = mods_dir.join(&m.filename);
+            let dst = mods_dir.join(format!("{}.disabled", m.filename));
+            if src.is_file() {
+                let _ = std::fs::rename(&src, &dst);
+            }
+        }
     }
 
     if let Some(mut src) = config.mods_source.take() {
@@ -585,13 +605,19 @@ fn export_pack_zip(base: &PathBuf, config: &InstanceConfig, filename: &str) -> R
     if let Ok(entries) = std::fs::read_dir(&mods_dir) {
         for entry in entries.flatten() {
             let p = entry.path();
-            let name = p
+            let disk_name = p
                 .file_name()
                 .map(|n| n.to_string_lossy().to_string())
                 .unwrap_or_default();
-            if !name.ends_with(".jar") {
+            // Los desactivados viajan con su nombre .jar: el estado
+            // activado/desactivado lo pone el catálogo al sincronizar.
+            let name = if disk_name.ends_with(".jar.disabled") {
+                disk_name.strip_suffix(".disabled").unwrap_or(&disk_name).to_string()
+            } else if disk_name.ends_with(".jar") {
+                disk_name
+            } else {
                 continue;
-            }
+            };
             let data = std::fs::read(&p).map_err(|e| e.to_string())?;
             zip.start_file(&name, options)
                 .map_err(|e| e.to_string())?;
@@ -1166,9 +1192,30 @@ pub async fn sync_catalog(
     }
 
     let rt = v.get("realtime");
+    let rt_url = rt
+        .and_then(|r| r.get("url"))
+        .and_then(|u| u.as_str())
+        .unwrap_or("")
+        .to_string();
+    let rt_anon = rt
+        .and_then(|r| r.get("anonKey"))
+        .and_then(|u| u.as_str())
+        .unwrap_or("")
+        .to_string();
+    // Persistir endpoint público para otras funciones (reserva de nombres).
+    if !rt_url.is_empty() && !rt_anon.is_empty() {
+        let mut app_cfg = crate::config::AppConfig::load();
+        if app_cfg.supabase_url.trim().is_empty() {
+            app_cfg.supabase_url = rt_url.clone();
+        }
+        if app_cfg.supabase_anon_key.trim().is_empty() {
+            app_cfg.supabase_anon_key = rt_anon.clone();
+        }
+        app_cfg.save();
+    }
     Ok(serde_json::json!({
         "changed": changed,
-        "realtimeUrl": rt.and_then(|r| r.get("url")).and_then(|u| u.as_str()).unwrap_or(""),
-        "realtimeAnon": rt.and_then(|r| r.get("anonKey")).and_then(|u| u.as_str()).unwrap_or(""),
+        "realtimeUrl": rt_url,
+        "realtimeAnon": rt_anon,
     }))
 }
