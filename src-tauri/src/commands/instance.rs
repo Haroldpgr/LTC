@@ -900,6 +900,45 @@ pub async fn install_instance(
     Ok(())
 }
 
+/// Lee la cola de un log del juego para la consola en vivo del launcher.
+/// `which`: "latest" (logs/latest.log), "stdout" (ltc-stdout.log) o
+/// "stderr" (ltc-stderr.log). Nunca falla por archivo ausente: devuelve "".
+#[tauri::command]
+pub async fn read_log_tail(
+    instance_id: String,
+    which: String,
+    max_lines: usize,
+    state: State<'_, Mutex<InstanceState>>,
+) -> Result<String, String> {
+    let base = {
+        let inst_state = state.lock().map_err(|e| e.to_string())?;
+        inst_state.config.instances_dir.clone()
+    };
+    let dir = InstanceConfig::instance_dir(&base, &instance_id);
+    // Solo archivos conocidos dentro de la instancia (sin rutas arbitrarias).
+    let path = match which.as_str() {
+        "stdout" => dir.join("logs").join("ltc-stdout.log"),
+        "stderr" => dir.join("logs").join("ltc-stderr.log"),
+        _ => dir.join("logs").join("latest.log"),
+    };
+    let max_lines = max_lines.clamp(10, 500);
+    let data = match std::fs::read(&path) {
+        Ok(d) => d,
+        Err(_) => return Ok(String::new()),
+    };
+    // Cola de ~64KB para no cargar logs gigantes en memoria.
+    const TAIL: usize = 64 * 1024;
+    let slice = if data.len() > TAIL {
+        &data[data.len() - TAIL..]
+    } else {
+        &data[..]
+    };
+    let text = String::from_utf8_lossy(slice);
+    let lines: Vec<&str> = text.lines().collect();
+    let start = lines.len().saturating_sub(max_lines);
+    Ok(lines[start..].join("\n"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

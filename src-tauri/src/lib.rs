@@ -51,6 +51,7 @@ pub fn run() {
             instance::update_instance,
             instance::delete_instance,
             instance::launch_instance,
+            instance::read_log_tail,
             instance::sync_and_launch,
             instance::install_instance,
             instance::admin_login,

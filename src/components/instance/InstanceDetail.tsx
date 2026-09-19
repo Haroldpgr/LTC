@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   ArrowLeft, Play, Download, Server, Cpu, Package, ToggleLeft, ToggleRight,
@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import { useInstanceStore } from '@/stores/instanceStore';
 import { open } from '@tauri-apps/plugin-dialog';
+import { invoke } from '@tauri-apps/api/core';
 import { InstanceIcon } from '@/components/common/InstanceIcon';
 
 type DetailTab = 'overview' | 'mods' | 'logs' | 'resources' | 'shaders';
@@ -47,6 +48,40 @@ export function InstanceDetail() {
 
   const [resolvingIcons, setResolvingIcons] = useState(false);
   const [iconsMsg, setIconsMsg] = useState('');
+
+  const [logSource, setLogSource] = useState<'latest' | 'stdout' | 'stderr'>('latest');
+  const [logText, setLogText] = useState('');
+  const [logLoading, setLogLoading] = useState(false);
+  const logBoxRef = useRef<HTMLDivElement>(null);
+
+  const fetchLog = async (src: 'latest' | 'stdout' | 'stderr') => {
+    setLogLoading(true);
+    try {
+      const text = await invoke<string>('read_log_tail', {
+        instanceId: instance.id,
+        which: src,
+        maxLines: 200,
+      });
+      setLogText(text);
+    } catch {
+      setLogText('');
+    } finally {
+      setLogLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (detailTab !== 'logs') return;
+    fetchLog(logSource);
+    const t = setInterval(() => fetchLog(logSource), 2000);
+    return () => clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [detailTab, logSource, instance.id, isRunning]);
+
+  useEffect(() => {
+    const el = logBoxRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [logText]);
 
   const [modsUrl, setModsUrl] = useState(instance.modsSource?.archiveUrl ?? '');
   const [modsMsg, setModsMsg] = useState('');
@@ -617,27 +652,60 @@ export function InstanceDetail() {
               <div className="flex items-center justify-between mb-3">
                 <div>
                   <h3 className="font-bold text-white text-sm">Consola y Registro de Ejecución</h3>
-                  <p className="text-xs text-dark-400">Salida en tiempo real del proceso de Minecraft</p>
+                  <p className="text-xs text-dark-400">Salida en vivo del proceso de Minecraft (se actualiza sola)</p>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  {([
+                    { id: 'latest' as const, label: 'Juego' },
+                    { id: 'stdout' as const, label: 'Salida' },
+                    { id: 'stderr' as const, label: 'Errores' },
+                  ]).map((s) => (
+                    <button
+                      key={s.id}
+                      onClick={() => setLogSource(s.id)}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                        logSource === s.id
+                          ? 'bg-primary-600 text-white shadow-md shadow-primary-600/25'
+                          : 'bg-dark-800/80 text-dark-400 hover:text-white border border-white/5'
+                      }`}
+                    >
+                      {s.label}
+                    </button>
+                  ))}
+                  <motion.button
+                    whileHover={{ scale: 1.05 }}
+                    whileTap={{ scale: 0.95 }}
+                    onClick={() => fetchLog(logSource)}
+                    className="p-2 rounded-lg bg-dark-800/80 hover:bg-dark-700 text-dark-300 hover:text-white border border-white/5 transition-all"
+                    title="Actualizar ahora"
+                  >
+                    <RefreshCw size={14} className={logLoading ? 'animate-spin' : ''} />
+                  </motion.button>
                 </div>
               </div>
 
-              <div className="glass-card p-5 font-mono text-xs bg-dark-950/90 text-dark-300 space-y-1.5 border border-white/10 shadow-2xl rounded-2xl">
-                <div className="flex items-center gap-2 pb-3 border-b border-white/5 text-dark-400">
+              <div
+                ref={logBoxRef}
+                className="glass-card p-5 font-mono text-xs bg-dark-950/90 text-dark-300 border border-white/10 shadow-2xl rounded-2xl h-[420px] overflow-y-auto whitespace-pre-wrap break-all"
+              >
+                <div className="flex items-center gap-2 pb-3 mb-2 border-b border-white/5 text-dark-400 sticky top-0 bg-dark-950/90">
                   <Terminal size={14} className="text-primary-400" />
-                  <span>LTC Launcher v1.0.0 — Consola de Instancia [{instance.name}]</span>
+                  <span>LTC Launcher — {instance.name} [{logSource}]</span>
+                  {isRunning ? (
+                    <span className="text-accent-400 flex items-center gap-1.5 ml-auto font-semibold">
+                      <motion.span animate={{ opacity: [1, 0, 1] }} transition={{ duration: 1, repeat: Infinity }}>●</motion.span>
+                      En ejecución
+                    </span>
+                  ) : (
+                    <span className="text-dark-600 ml-auto">Inactivo</span>
+                  )}
                 </div>
-                <p className="text-primary-400">[LTC] Versión de Minecraft: {instance.mcVersion} ({instance.modLoader})</p>
-                <p className="text-primary-400">[LTC] Java Runtime: Java {instance.javaVersion}</p>
-                <p className="text-primary-400">[LTC] Mods totales: {instance.mods.length} ({instance.mods.filter(m => m.enabled).length} activos)</p>
-                <p className="text-dark-600">──────────────────────────────────────────────────────────</p>
-                <p className="text-dark-400">[INFO] Esperando inicio de la instancia para capturar salida de Log...</p>
-                {isRunning ? (
-                  <p className="text-accent-400 flex items-center gap-2 pt-2 font-semibold">
-                    <motion.span animate={{ opacity: [1, 0, 1] }} transition={{ duration: 1, repeat: Infinity }} className="text-accent-400">●</motion.span>
-                    Proceso de Minecraft activo y corriendo.
-                  </p>
+                {logText ? (
+                  <p>{logText}</p>
                 ) : (
-                  <p className="text-dark-600 pt-2">Estado del proceso: En espera / Inactivo</p>
+                  <p className="text-dark-600">
+                    {isRunning || logLoading ? 'Leyendo registro...' : 'Sin salida todavía. Dale a Jugar para ver el arranque en vivo.'}
+                  </p>
                 )}
               </div>
             </motion.div>
