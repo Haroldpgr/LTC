@@ -60,6 +60,8 @@ pub struct InstanceInput {
     pub mods: Vec<crate::commands::mods_cmd::ModInfoFrontend>,
     #[serde(rename = "isInstalled")]
     pub is_installed: bool,
+    #[serde(default, rename = "official")]
+    pub official: bool,
 }
 
 pub struct InstanceState {
@@ -122,16 +124,12 @@ pub async fn create_instance(
             .map(|m| crate::commands::mods_cmd::ModInfoFrontend::to_internal(&m))
             .collect(),
         is_installed: instance.is_installed,
-        // Pack oficial preconfigurado: lo que publique el admin les llega
-        // solo a los usuarios al abrir el launcher y al darle a Jugar.
-        mods_source: {
-            let url = crate::minecraft::launcher::default_mods_pack_url();
-            if url.is_empty() {
-                None
-            } else {
-                Some(crate::minecraft::launcher::ModsSource::new_url(url))
-            }
-        },
+        official: instance.official,
+        // Fuente preconfigurada al pack propio de la instancia: lo que
+        // publique el admin les llega solo al abrir el launcher y al Jugar.
+        mods_source: Some(crate::minecraft::launcher::ModsSource::new_url(
+            crate::minecraft::launcher::mods_pack_url_for(&id),
+        )),
     };
 
     let instance_dir = InstanceConfig::instance_dir(&state.config.instances_dir, &id);
@@ -213,6 +211,9 @@ pub async fn update_instance(
     }
     if let Some(v) = updates.get("isInstalled").and_then(|v| v.as_bool()) {
         config.is_installed = v;
+    }
+    if let Some(v) = updates.get("official").and_then(|v| v.as_bool()) {
+        config.official = v;
     }
 
     if config.mod_loader != old_loader.0

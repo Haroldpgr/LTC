@@ -100,6 +100,9 @@ pub struct InstanceConfig {
     pub mods: Vec<ModInfo>,
     #[serde(alias = "is_installed")]
     pub is_installed: bool,
+    /// Instancia oficial del servidor: se crea/actualiza sola desde el catálogo.
+    #[serde(default)]
+    pub official: bool,
     #[serde(default)]
     pub mods_source: Option<ModsSource>,
 }
@@ -145,11 +148,29 @@ pub struct Launcher;
 pub const MODS_REPO: &str = "Haroldpgr/LTC";
 pub const MODS_RELEASE_TAG: &str = "mods-latest";
 pub const MODS_ASSET_NAME: &str = "mods.zip";
+pub const CATALOG_ASSET_NAME: &str = "catalog.json";
 
 pub fn default_mods_pack_url() -> String {
     format!(
         "https://github.com/{}/releases/download/{}/{}",
         MODS_REPO, MODS_RELEASE_TAG, MODS_ASSET_NAME
+    )
+}
+
+/// Pack de mods propio de una instancia (estable por id).
+pub fn mods_pack_url_for(instance_id: &str) -> String {
+    format!(
+        "https://github.com/{}/releases/download/{}/mods-{}.zip",
+        MODS_REPO,
+        MODS_RELEASE_TAG,
+        instance_id
+    )
+}
+
+pub fn default_catalog_url() -> String {
+    format!(
+        "https://github.com/{}/releases/download/{}/{}",
+        MODS_REPO, MODS_RELEASE_TAG, CATALOG_ASSET_NAME
     )
 }
 

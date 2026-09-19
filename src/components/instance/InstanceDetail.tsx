@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   ArrowLeft, Play, Download, Server, Cpu, Package, ToggleLeft, ToggleRight,
@@ -7,7 +7,6 @@ import {
 } from 'lucide-react';
 import { useInstanceStore } from '@/stores/instanceStore';
 import { open } from '@tauri-apps/plugin-dialog';
-import { invoke } from '@tauri-apps/api/core';
 import { InstanceIcon } from '@/components/common/InstanceIcon';
 
 type DetailTab = 'overview' | 'mods' | 'logs' | 'resources' | 'shaders';
@@ -52,14 +51,10 @@ export function InstanceDetail() {
   const [modsUrl, setModsUrl] = useState(instance.modsSource?.archiveUrl ?? '');
   const [modsMsg, setModsMsg] = useState('');
   const [syncingMods, setSyncingMods] = useState(false);
-  const [officialModsUrl, setOfficialModsUrl] = useState('');
-  useEffect(() => {
-    invoke<string>('get_default_mods_url').then(setOfficialModsUrl).catch(() => {});
-  }, []);
   const activeModsSource = instance.modsSource && instance.modsSource.type !== 'none'
     ? instance.modsSource
     : null;
-  const isOfficialPack = !!officialModsUrl && activeModsSource?.archiveUrl === officialModsUrl;
+  const isOfficialPack = !!instance.official;
 
   const handleSaveModsUrl = async () => {
     setModsMsg('');

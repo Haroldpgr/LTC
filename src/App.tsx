@@ -14,6 +14,7 @@ export default function App() {
   const account = useAuthStore((s) => s.account);
   const checkSession = useAuthStore((s) => s.checkSession);
   const loadInstances = useInstanceStore((s) => s.loadInstances);
+  const syncCatalog = useInstanceStore((s) => s.syncCatalog);
   const syncOfficialSources = useInstanceStore((s) => s.syncOfficialSources);
   const isAdmin = useInstanceStore((s) => s.isAdmin);
   const [showSplash, setShowSplash] = useState(true);
@@ -29,14 +30,16 @@ export default function App() {
 
   useEffect(() => {
     if (account) {
-      // Al entrar: cargar instancias y sincronizar en silencio los packs
-      // de mods publicados por el admin. Sin bloquear la interfaz.
+      // Al entrar: cargar instancias, traer el catálogo oficial del servidor
+      // (las instancias del admin aparecen solas) y sincronizar sus mods.
+      // Todo en silencio, sin bloquear la interfaz.
       (async () => {
         await loadInstances();
+        await syncCatalog();
         syncOfficialSources().catch(() => {});
       })();
     }
-  }, [account, loadInstances, syncOfficialSources]);
+  }, [account, loadInstances, syncCatalog, syncOfficialSources]);
 
   return (
     <div className="h-screen w-screen flex flex-col overflow-hidden select-none bg-dark-950">

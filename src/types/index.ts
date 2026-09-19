@@ -47,6 +47,7 @@ export interface ModpackInstance {
   mods: Mod[];
   isInstalled: boolean;
   isUpdating: boolean;
+  official: boolean;
   lastPlayed?: string;
   modsSource?: ModsSource;
 }

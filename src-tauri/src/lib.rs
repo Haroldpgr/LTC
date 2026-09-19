@@ -71,6 +71,8 @@ pub fn run() {
             mods_source::get_default_mods_url,
             mods_source::clear_mods_source,
             mods_source::sync_mods_source_now,
+            mods_source::publish_catalog,
+            mods_source::sync_catalog,
             mods_source::set_github_token,
             mods_source::has_github_token,
             mods_source::publish_mods_pack,

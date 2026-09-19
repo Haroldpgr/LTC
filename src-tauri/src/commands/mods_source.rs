@@ -532,14 +532,14 @@ pub fn has_github_token(state: State<'_, Mutex<InstanceState>>) -> Result<bool, 
     Ok(!state_lock.config.github_token.trim().is_empty())
 }
 
-/// Exporta los mods a un zip de nombre fijo (mods.zip), listo para publicar.
-fn export_pack_zip(base: &PathBuf, config: &InstanceConfig) -> Result<PathBuf, String> {
+/// Exporta los mods a un zip con el nombre dado, listo para publicar.
+fn export_pack_zip(base: &PathBuf, config: &InstanceConfig, filename: &str) -> Result<PathBuf, String> {
     use std::io::Write;
 
     let mods_dir = InstanceConfig::mods_dir(base, &config.id);
     let out_dir = InstanceConfig::instance_dir(base, &config.id).join("mods-export");
     std::fs::create_dir_all(&out_dir).map_err(|e| e.to_string())?;
-    let dest = out_dir.join(crate::minecraft::launcher::MODS_ASSET_NAME);
+    let dest = out_dir.join(filename);
 
     let file = std::fs::File::create(&dest).map_err(|e| e.to_string())?;
     let mut zip = zip::ZipWriter::new(file);
@@ -598,7 +598,7 @@ pub async fn publish_mods_pack(
 
     let mut config =
         InstanceConfig::load(&base, &instance_id).ok_or("Instancia no encontrada")?;
-    let zip_path = export_pack_zip(&base, &config)?;
+    let zip_path = export_pack_zip(&base, &config, crate::minecraft::launcher::MODS_ASSET_NAME)?;
 
     let client = reqwest::Client::builder()
         .user_agent("LTC-Launcher")
@@ -719,4 +719,366 @@ pub async fn publish_mods_pack(
     }
 
     Ok(public_url)
+}
+
+// ---------------------------------------------------------------------------
+// Catálogo oficial: las instancias del admin aparecen solas en los launchers
+// de los usuarios (GitHub hace de "base de datos", sin servidor propio).
+// ---------------------------------------------------------------------------
+
+fn gh_client() -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
+        .user_agent("LTC-Launcher")
+        .timeout(std::time::Duration::from_secs(180))
+        .build()
+        .map_err(|e| e.to_string())
+}
+
+fn token_or_err(token: &str) -> Result<String, String> {
+    let t = token.trim();
+    if t.is_empty() {
+        return Err("Falta el token de GitHub: configúralo en el Panel admin (Token de GitHub) para publicar.".to_string());
+    }
+    Ok(t.to_string())
+}
+
+fn token_bad() -> String {
+    "Token inválido o sin permisos: necesita acceso de escritura al repo (scope repo o Contents: read+write).".to_string()
+}
+
+/// GET del release por tag (None si no existe).
+async fn gh_get_release(
+    client: &reqwest::Client,
+    auth: &str,
+) -> Result<Option<serde_json::Value>, String> {
+    use crate::minecraft::launcher::{MODS_RELEASE_TAG, MODS_REPO};
+    let url = format!(
+        "https://api.github.com/repos/{}/releases/tags/{}",
+        MODS_REPO, MODS_RELEASE_TAG
+    );
+    let resp = client
+        .get(&url)
+        .header("Authorization", auth)
+        .header("Accept", "application/vnd.github+json")
+        .send()
+        .await
+        .map_err(|e| format!("GitHub no responde: {}", e))?;
+    match resp.status() {
+        reqwest::StatusCode::NOT_FOUND => Ok(None),
+        reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN => Err(token_bad()),
+        s if s.is_success() => resp
+            .json()
+            .await
+            .map_err(|e| format!("Respuesta inesperada de GitHub: {}", e))
+            .map(Some),
+        s => Err(format!("GitHub devolvió {}", s)),
+    }
+}
+
+/// GET o creación del release del contenido oficial.
+async fn gh_get_or_create_release(
+    client: &reqwest::Client,
+    auth: &str,
+) -> Result<serde_json::Value, String> {
+    use crate::minecraft::launcher::{MODS_RELEASE_TAG, MODS_REPO};
+    if let Some(rel) = gh_get_release(client, auth).await? {
+        return Ok(rel);
+    }
+    let api = format!("https://api.github.com/repos/{}/releases", MODS_REPO);
+    let created = client
+        .post(&api)
+        .header("Authorization", auth)
+        .header("Accept", "application/vnd.github+json")
+        .json(&serde_json::json!({
+            "tag_name": MODS_RELEASE_TAG,
+            "name": "Contenido oficial LTC",
+            "body": "Packs de mods y catálogo de instancias del servidor. Se actualiza solo en el launcher.",
+            "draft": false,
+            "prerelease": false,
+        }))
+        .send()
+        .await
+        .map_err(|e| format!("No se pudo crear el release: {}", e))?;
+    let status = created.status();
+    let body: serde_json::Value = created.json().await.unwrap_or_default();
+    if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
+        return Err(token_bad());
+    }
+    if !status.is_success() {
+        return Err(format!(
+            "GitHub rechazó crear el release ({}): {}",
+            status,
+            body.get("message").and_then(|m| m.as_str()).unwrap_or("")
+        ));
+    }
+    Ok(body)
+}
+
+async fn gh_delete_asset(
+    client: &reqwest::Client,
+    auth: &str,
+    release: &serde_json::Value,
+    name: &str,
+) {
+    use crate::minecraft::launcher::MODS_REPO;
+    if let Some(assets) = release.get("assets").and_then(|a| a.as_array()) {
+        for a in assets {
+            let aname = a.get("name").and_then(|n| n.as_str()).unwrap_or("");
+            let id = a.get("id").and_then(|i| i.as_u64()).unwrap_or(0);
+            if aname == name && id != 0 {
+                let del_url = format!(
+                    "https://api.github.com/repos/{}/releases/assets/{}",
+                    MODS_REPO, id
+                );
+                let _ = client
+                    .delete(&del_url)
+                    .header("Authorization", auth)
+                    .header("Accept", "application/vnd.github+json")
+                    .send()
+                    .await;
+            }
+        }
+    }
+}
+
+/// Sube un archivo local como asset (reemplazando el anterior del mismo
+/// nombre). Devuelve la URL pública de descarga.
+async fn gh_upload_file(
+    client: &reqwest::Client,
+    auth: &str,
+    release: &serde_json::Value,
+    name: &str,
+    path: &Path,
+    content_type: &str,
+) -> Result<String, String> {
+    gh_delete_asset(client, auth, release, name).await;
+    let upload_tpl = release
+        .get("upload_url")
+        .and_then(|u| u.as_str())
+        .ok_or("GitHub no devolvió URL de subida.")?
+        .to_string();
+    let upload_url = upload_tpl.replace("{?name,label}", &format!("?name={}", name));
+    let meta = std::fs::metadata(path).map_err(|e| e.to_string())?;
+    let file = tokio::fs::File::open(path)
+        .await
+        .map_err(|e| e.to_string())?;
+    let up_resp = client
+        .post(&upload_url)
+        .header("Authorization", auth)
+        .header("Accept", "application/vnd.github+json")
+        .header("Content-Type", content_type)
+        .header("Content-Length", meta.len())
+        .body(reqwest::Body::from(file))
+        .send()
+        .await
+        .map_err(|e| format!("Falló la subida de {}: {}", name, e))?;
+    let up_status = up_resp.status();
+    let up_body: serde_json::Value = up_resp.json().await.unwrap_or_default();
+    if !up_status.is_success() {
+        return Err(format!(
+            "GitHub rechazó {} ({}): {}",
+            name,
+            up_status,
+            up_body.get("message").and_then(|m| m.as_str()).unwrap_or("")
+        ));
+    }
+    Ok(up_body
+        .get("browser_download_url")
+        .and_then(|u| u.as_str())
+        .unwrap_or("")
+        .to_string())
+}
+
+fn list_local_instances(base: &PathBuf) -> Vec<InstanceConfig> {
+    let mut out = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(base) {
+        for entry in entries.flatten() {
+            if entry.path().is_dir() {
+                let id = entry.file_name().to_string_lossy().to_string();
+                if let Some(cfg) = InstanceConfig::load(base, &id) {
+                    out.push(cfg);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Publica el contenido oficial: por cada instancia marcada como Oficial
+/// sube su pack de mods, y después sube el catalog.json con todas.
+/// Lo que publiques aquí les aparece solo a los usuarios al abrir el launcher.
+#[tauri::command]
+pub async fn publish_catalog(
+    state: State<'_, Mutex<InstanceState>>,
+) -> Result<String, String> {
+    use crate::minecraft::launcher::{CATALOG_ASSET_NAME, mods_pack_url_for};
+
+    let (base, token) = {
+        let state_lock = state.lock().map_err(|e| e.to_string())?;
+        (
+            state_lock.config.instances_dir.clone(),
+            state_lock.config.github_token.clone(),
+        )
+    };
+    let token = token_or_err(&token)?;
+
+    let mut officials: Vec<InstanceConfig> = list_local_instances(&base)
+        .into_iter()
+        .filter(|c| c.official)
+        .collect();
+    if officials.is_empty() {
+        return Err("Marca al menos una instancia como Oficial para publicar.".to_string());
+    }
+
+    let client = gh_client()?;
+    let auth = format!("Bearer {}", token);
+    let mut release = gh_get_or_create_release(&client, &auth).await?;
+
+    let mut packs = 0u32;
+    for cfg in officials.iter_mut() {
+        let pack_name = format!("mods-{}.zip", cfg.id);
+        match export_pack_zip(&base, cfg, &pack_name) {
+            Ok(zip_path) => {
+                gh_upload_file(&client, &auth, &release, &pack_name, &zip_path, "application/zip")
+                    .await?;
+                release = gh_get_release(&client, &auth)
+                    .await?
+                    .ok_or("El release desapareció a mitad de la publicación.")?;
+                let hash = Launcher::hash_file(&zip_path)?;
+                if let Some(mut src) = cfg.mods_source.take() {
+                    src.fingerprint = hash;
+                    src.synced_at = now_iso();
+                    cfg.mods_source = Some(src);
+                }
+                packs += 1;
+            }
+            Err(_) => {
+                // Sin mods .jar: se publica la instancia sin pack.
+            }
+        }
+        // Fuente fijada al pack propio de la instancia.
+        let url = mods_pack_url_for(&cfg.id);
+        let mut src = cfg
+            .mods_source
+            .clone()
+            .unwrap_or_else(|| ModsSource::new_url(url.clone()));
+        src.source_type = ModsSource::TYPE_ARCHIVE.to_string();
+        src.archive_url = url;
+        cfg.mods_source = Some(src);
+        cfg.save(&base)?;
+    }
+
+    // Catálogo con las oficiales recién guardadas.
+    let fresh: Vec<InstanceConfig> = list_local_instances(&base)
+        .into_iter()
+        .filter(|c| c.official)
+        .collect();
+    let catalog = serde_json::json!({
+        "updatedAt": now_iso(),
+        "instances": fresh,
+    });
+    let cat_dir = std::env::temp_dir().join("ltc-catalog");
+    std::fs::create_dir_all(&cat_dir).map_err(|e| e.to_string())?;
+    let cat_path = cat_dir.join(CATALOG_ASSET_NAME);
+    std::fs::write(
+        &cat_path,
+        serde_json::to_string_pretty(&catalog).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())?;
+    gh_upload_file(
+        &client,
+        &auth,
+        &release,
+        CATALOG_ASSET_NAME,
+        &cat_path,
+        "application/json",
+    )
+    .await?;
+
+    Ok(format!(
+        "Publicado: {} instancias oficiales y {} packs de mods. Ya les sale solo a todos.",
+        fresh.len(),
+        packs
+    ))
+}
+
+/// Sincroniza el catálogo oficial: crea o actualiza las instancias
+/// oficiales en este PC. Se ejecuta solo al abrir el launcher.
+/// Devuelve cuántas instancias cambiaron.
+#[tauri::command]
+pub async fn sync_catalog(state: State<'_, Mutex<InstanceState>>) -> Result<usize, String> {
+    let base = {
+        let inst_state = state.lock().map_err(|e| e.to_string())?;
+        inst_state.config.instances_dir.clone()
+    };
+    let url = crate::minecraft::launcher::default_catalog_url();
+    let client = reqwest::Client::builder()
+        .user_agent("LTC-Launcher")
+        .timeout(std::time::Duration::from_secs(25))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let resp = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("No se pudo descargar el catálogo: {}", e))?;
+    if !resp.status().is_success() {
+        return Err("Aún no hay catálogo publicado por el admin.".to_string());
+    }
+    let v: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("Catálogo inválido: {}", e))?;
+    let items = v
+        .get("instances")
+        .and_then(|i| i.as_array())
+        .ok_or("Catálogo inválido: sin instancias.")?;
+
+    let mut changed = 0usize;
+    let mut seen: Vec<String> = Vec::new();
+    for item in items {
+        let mut remote: InstanceConfig = serde_json::from_value(item.clone())
+            .map_err(|e| format!("Instancia inválida en el catálogo: {}", e))?;
+        remote.official = true;
+        seen.push(remote.id.clone());
+        match InstanceConfig::load(&base, &remote.id) {
+            Some(mut local) => {
+                let needs_reinstall = local.mc_version != remote.mc_version
+                    || local.mod_loader != remote.mod_loader
+                    || local.mod_loader_version != remote.mod_loader_version
+                    || local.java_version != remote.java_version;
+                // Se preservan los ajustes de rendimiento y el estado local.
+                let keep_ram_min = local.ram_min.clone();
+                let keep_ram_max = local.ram_max.clone();
+                let keep_jvm = local.jvm_args.clone();
+                let was_installed = local.is_installed;
+                let before = serde_json::to_value(&local).unwrap_or_default();
+                local = remote;
+                local.ram_min = keep_ram_min;
+                local.ram_max = keep_ram_max;
+                local.jvm_args = keep_jvm;
+                local.is_installed = if needs_reinstall { false } else { was_installed };
+                if serde_json::to_value(&local).unwrap_or_default() != before {
+                    local.save(&base)?;
+                    changed += 1;
+                }
+            }
+            None => {
+                remote.is_installed = false;
+                remote.save(&base)?;
+                changed += 1;
+            }
+        }
+    }
+
+    // Oficiales que el admin retiró: se desmarcan pero se conservan los archivos.
+    for mut local in list_local_instances(&base) {
+        if local.official && !seen.contains(&local.id) {
+            local.official = false;
+            local.save(&base)?;
+            changed += 1;
+        }
+    }
+
+    Ok(changed)
 }

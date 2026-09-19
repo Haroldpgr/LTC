@@ -40,6 +40,8 @@ interface InstanceStore {
   syncModsSource: (instanceId: string) => Promise<boolean>;
   syncOfficialSources: () => Promise<number>;
   publishModsPack: (instanceId: string) => Promise<string>;
+  publishCatalog: () => Promise<string>;
+  syncCatalog: () => Promise<number>;
 }
 
 export interface SavedAccount {
@@ -270,6 +272,22 @@ export const useInstanceStore = create<InstanceStore>((set, get) => {
       const url = await invoke<string>('publish_mods_pack', { instanceId });
       await get().loadInstances();
       return url;
+    },
+    publishCatalog: async () => {
+      const msg = await invoke<string>('publish_catalog');
+      await get().loadInstances();
+      return msg;
+    },
+    syncCatalog: async () => {
+      // Catálogo oficial del servidor: las instancias publicadas por el
+      // admin se crean/actualizan solas. Silencioso si no hay red o catálogo.
+      try {
+        const changed = await invoke<number>('sync_catalog');
+        if (changed > 0) await get().loadInstances();
+        return changed;
+      } catch {
+        return 0;
+      }
     },
   };
 });

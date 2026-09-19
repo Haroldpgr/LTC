@@ -71,7 +71,7 @@ function getLoaderVersion(loader: string, mcVersion: string): string {
 }
 
 export function AdminPanel() {
-  const { instances, createInstance, updateInstance, deleteInstance, addModToLocal, removeMod, adminLogout, publishModsPack } = useInstanceStore();
+  const { instances, createInstance, updateInstance, deleteInstance, addModToLocal, removeMod, adminLogout, publishCatalog } = useInstanceStore();
   const [tab, setTab] = useState<Tab>('instances');
   const [editingInstance, setEditingInstance] = useState<ModpackInstance | null>(null);
   const [iconError, setIconError] = useState('');
@@ -87,13 +87,13 @@ export function AdminPanel() {
     name: '', description: '', icon: '⛏️', mcVersion: '1.20.1',
     modLoader: 'forge' as 'forge' | 'fabric' | 'none', modLoaderVersion: '47.4.10',
     javaVersion: 17, ramMin: '4G', ramMax: '4G', jvmArgs: '',
-    serverAddress: '', serverPort: 25565,
+    serverAddress: '', serverPort: 25565, official: false,
   });
 
   const resetForm = () => {
     setForm({ name: '', description: '', icon: '⛏️', mcVersion: '1.20.1', modLoader: 'forge',
       modLoaderVersion: '47.4.10', javaVersion: 17, ramMin: '4G', ramMax: '4G', jvmArgs: '',
-      serverAddress: '', serverPort: 25565 });
+      serverAddress: '', serverPort: 25565, official: false });
     setEditingInstance(null);
   };
 
@@ -146,6 +146,7 @@ export function AdminPanel() {
       jvmArgs: form.jvmArgs.split(' ').filter(Boolean), serverAddress: form.serverAddress,
       serverPort: form.serverPort, mods: editingInstance?.mods ?? [],
       isInstalled: editingInstance?.isInstalled ?? false, isUpdating: false,
+      official: form.official,
     };
     if (editingInstance) await updateInstance(editingInstance.id, data);
     else await createInstance(data);
@@ -164,6 +165,7 @@ export function AdminPanel() {
       ramMin: instance.ramMin ?? '4G', ramMax: instance.ramMax ?? '4G',
       jvmArgs: (instance.jvmArgs ?? []).join(' '),
       serverAddress: instance.serverAddress ?? '', serverPort: instance.serverPort ?? 25565,
+      official: instance.official ?? false,
     });
     setTab('edit');
   };
@@ -195,12 +197,12 @@ export function AdminPanel() {
     }
   };
 
-  const handleExportPack = async (instanceId: string) => {
+  const handlePublishAll = async () => {
     setExportMsg('');
-    setExportingId(instanceId);
+    setExportingId('all');
     try {
-      const url = await publishModsPack(instanceId);
-      setExportMsg(`Pack publicado. Ya les llega solo a todos al abrir el launcher o darle a Jugar: ${url}`);
+      const msg = await publishCatalog();
+      setExportMsg(msg);
     } catch (e) {
       setExportMsg(String(e));
     }
@@ -294,7 +296,14 @@ export function AdminPanel() {
                       <InstanceIcon icon={inst.icon} className="text-xl" />
                     </div>
                     <div className="flex-1 min-w-0">
-                      <h4 className="font-bold text-white text-sm">{inst.name}</h4>
+                      <h4 className="font-bold text-white text-sm flex items-center gap-2">
+                        {inst.name}
+                        {inst.official && (
+                          <span className="px-2 py-0.5 bg-emerald-500/15 text-emerald-400 border border-emerald-500/25 rounded-full text-[10px] font-bold">
+                            Oficial
+                          </span>
+                        )}
+                      </h4>
                       <p className="text-[11px] text-dark-400 mt-0.5">
                         MC {inst.mcVersion} · {inst.modLoader} · {inst.mods.length} mods
                         {inst.serverAddress && ` · ${inst.serverAddress}`}
@@ -305,11 +314,11 @@ export function AdminPanel() {
                         className="btn-secondary text-xs flex items-center gap-1 py-1.5 px-3">
                         <Upload size={12} /> Mods
                       </motion.button>
-                      <motion.button whileTap={{ scale: 0.9 }} onClick={() => handleExportPack(inst.id)}
-                        disabled={exportingId === inst.id || inst.mods.length === 0}
-                        title={inst.mods.length === 0 ? 'Añade mods a la instancia primero' : 'Publicar los mods: los sube al pack oficial y les llegan solos a todos'}
+                      <motion.button whileTap={{ scale: 0.9 }} onClick={handlePublishAll}
+                        disabled={exportingId === 'all'}
+                        title="Publicar: sube las instancias oficiales, sus mods y el catálogo. Les aparece solo a todos."
                         className="btn-secondary text-xs flex items-center gap-1 py-1.5 px-3 disabled:opacity-50">
-                        <Share2 size={12} /> {exportingId === inst.id ? 'Publicando...' : 'Publicar'}
+                        <Share2 size={12} /> {exportingId === 'all' ? 'Publicando...' : 'Publicar'}
                       </motion.button>
                       <motion.button whileTap={{ scale: 0.9 }} onClick={() => handleEdit(inst)} className="btn-ghost p-2">
                         <Edit3 size={15} />
@@ -525,6 +534,17 @@ export function AdminPanel() {
                   <FormField label="Dirección"><input type="text" value={form.serverAddress} onChange={(e) => setForm({ ...form, serverAddress: e.target.value })} className="input-field" placeholder="play.servidor.com" /></FormField>
                   <FormField label="Puerto"><input type="number" value={form.serverPort} onChange={(e) => setForm({ ...form, serverPort: parseInt(e.target.value) || 25565 })} className="input-field" /></FormField>
                 </div>
+                <label className="flex items-center gap-2.5 cursor-pointer bg-accent-500/5 border border-accent-500/20 rounded-xl px-3.5 py-2.5">
+                  <input
+                    type="checkbox"
+                    checked={form.official}
+                    onChange={(e) => setForm({ ...form, official: e.target.checked })}
+                    className="w-4 h-4 accent-emerald-500"
+                  />
+                  <span className="text-xs text-dark-200">
+                    <span className="font-semibold text-white">Instancia oficial:</span> aparece sola en los launchers de los usuarios al publicar
+                  </span>
+                </label>
               </div>
 
               <div className="flex gap-3 pt-2">
