@@ -231,10 +231,27 @@ pub async fn delete_instance(
     id: String,
     state: State<'_, Mutex<InstanceState>>,
 ) -> Result<(), String> {
-    let state = state.lock().map_err(|e| e.to_string())?;
-    let dir = InstanceConfig::instance_dir(&state.config.instances_dir, &id);
+    let (base, sb_url, sb_service, was_official) = {
+        let state_lock = state.lock().map_err(|e| e.to_string())?;
+        let base = state_lock.config.instances_dir.clone();
+        let official = InstanceConfig::load(&base, &id)
+            .map(|c| c.official)
+            .unwrap_or(false);
+        (
+            base,
+            state_lock.config.supabase_url.clone(),
+            state_lock.config.supabase_service_key.clone(),
+            official,
+        )
+    };
+    let dir = InstanceConfig::instance_dir(&base, &id);
     if dir.exists() {
         std::fs::remove_dir_all(&dir).map_err(|e| e.to_string())?;
+    }
+    // Si era oficial, borrar también sus filas vivas para que desaparezca
+    // a los usuarios (best-effort: el borrado local ya está hecho).
+    if was_official && !sb_url.trim().is_empty() && !sb_service.trim().is_empty() {
+        crate::commands::mods_source::delete_supabase_rows(&sb_url, &sb_service, &id).await;
     }
     Ok(())
 }

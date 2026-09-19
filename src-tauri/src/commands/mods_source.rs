@@ -1075,6 +1075,9 @@ pub async fn publish_catalog(
     // Filas vivas (instancias + estados): manda Supabase si hay service key.
     if !sb_url.trim().is_empty() && !sb_service.trim().is_empty() {
         push_supabase_rows(&sb_url, &sb_service, &fresh).await?;
+        // Podar filas de instancias que ya no son oficiales (borradas o
+        // desmarcadas): si no, seguirían apareciendo a los usuarios.
+        prune_supabase_rows(&sb_url, &sb_service, &fresh).await?;
     }
 
     Ok(format!(
@@ -1082,6 +1085,37 @@ pub async fn publish_catalog(
         fresh.len(),
         packs
     ))
+}
+
+/// Borra filas de instancias que ya no están en la lista oficial.
+async fn prune_supabase_rows(
+    sb_url: &str,
+    service_key: &str,
+    officials: &[InstanceConfig],
+) -> Result<(), String> {
+    let root = sb_url.trim_end_matches('/');
+    let client = gh_client()?;
+    let apikey = service_key.trim();
+    let auth = format!("Bearer {}", apikey);
+    let resp = client
+        .get(format!("{}/rest/v1/instances?select=id", root))
+        .header("apikey", apikey)
+        .header("Authorization", &auth)
+        .send()
+        .await
+        .map_err(|e| format!("Supabase no responde: {}", e))?;
+    if !resp.status().is_success() {
+        return Ok(()); // best-effort
+    }
+    let rows: Vec<serde_json::Value> = resp.json().await.unwrap_or_default();
+    for row in &rows {
+        if let Some(id) = row.get("id").and_then(|i| i.as_str()) {
+            if !officials.iter().any(|c| c.id == id) {
+                delete_supabase_rows(sb_url, service_key, id).await;
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Sube instancias y estados de mods a las tablas vivas.
@@ -1513,6 +1547,35 @@ pub async fn sync_supabase_data(
         "modsChanged": mods_changed,
         "notice": notice,
     }))
+}
+
+/// Borra las filas vivas de una instancia (best-effort: nunca bloquea).
+pub(crate) async fn delete_supabase_rows(sb_url: &str, service_key: &str, instance_id: &str) {
+    let root = sb_url.trim_end_matches('/');
+    let Ok(client) = reqwest::Client::builder()
+        .user_agent("LTC-Launcher")
+        .timeout(std::time::Duration::from_secs(25))
+        .build()
+    else {
+        return;
+    };
+    let apikey = service_key.trim();
+    let auth = format!("Bearer {}", apikey);
+    let _ = client
+        .delete(format!("{}/rest/v1/instances?id=eq.{}", root, instance_id))
+        .header("apikey", apikey)
+        .header("Authorization", &auth)
+        .send()
+        .await;
+    let _ = client
+        .delete(format!(
+            "{}/rest/v1/mod_states?instance_id=eq.{}",
+            root, instance_id
+        ))
+        .header("apikey", apikey)
+        .header("Authorization", &auth)
+        .send()
+        .await;
 }
 
 /// Publica un aviso para todos los usuarios (llega al instante).
