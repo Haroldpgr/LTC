@@ -476,12 +476,32 @@ impl Launcher {
 
         let mut cmd = Command::new(java_path);
         cmd.args(&args).current_dir(instance_dir);
-        // Sin ventana de consola y sin heredar stdio: el juego escribe sus
-        // propios logs en la instancia y así el arranque es limpio y fluido.
+        // Sin ventana de consola y sin heredar stdio: la salida del juego
+        // va a archivos de log en vez de perderse (imprescindibles para
+        // diagnosticar un "código 1": antes se descartaba y no se veía nada).
         Self::hide_console(&mut cmd);
-        cmd.stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
+        cmd.stdin(Stdio::null());
+        let out_log = instance_dir.join("logs").join("ltc-stdout.log");
+        let err_log = instance_dir.join("logs").join("ltc-stderr.log");
+        if let Some(parent) = out_log.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        match std::fs::File::create(&out_log) {
+            Ok(f) => {
+                cmd.stdout(f);
+            }
+            Err(_) => {
+                cmd.stdout(Stdio::null());
+            }
+        }
+        match std::fs::File::create(&err_log) {
+            Ok(f) => {
+                cmd.stderr(f);
+            }
+            Err(_) => {
+                cmd.stderr(Stdio::null());
+            }
+        }
         cmd
     }
 

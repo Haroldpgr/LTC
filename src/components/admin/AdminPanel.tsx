@@ -4,7 +4,7 @@ import { getVersion } from '@tauri-apps/api/app';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   ArrowLeft, Plus, Trash2, Edit3, Package, Server, Save, X,
-  Upload, Gamepad2, Shield, Cpu, ImagePlus, Share2, Rocket, Zap, Megaphone,
+  Upload, Gamepad2, Shield, Cpu, ImagePlus, Share2, Rocket, Zap, Megaphone, Lock,
 } from 'lucide-react';
 import { useInstanceStore } from '@/stores/instanceStore';
 import { open } from '@tauri-apps/plugin-dialog';
@@ -83,6 +83,9 @@ export function AdminPanel() {
   const [githubToken, setGithubToken] = useState('');
   const [tokenMsg, setTokenMsg] = useState('');
   const [tokenReady, setTokenReady] = useState(false);
+  const [adminCurrent, setAdminCurrent] = useState('');
+  const [adminNext, setAdminNext] = useState('');
+  const [adminPassMsg, setAdminPassMsg] = useState('');
   const [sbUrl, setSbUrl] = useState('');
   const [sbAnon, setSbAnon] = useState('');
   const [sbService, setSbService] = useState('');
@@ -244,6 +247,18 @@ export function AdminPanel() {
       setTokenMsg('Token guardado. Ya puedes publicar con un clic.');
     } catch (e) {
       setTokenMsg(String(e));
+    }
+  };
+
+  const handleChangeAdminPassword = async () => {
+    setAdminPassMsg('');
+    try {
+      await invoke('change_admin_password', { current: adminCurrent, next: adminNext });
+      setAdminCurrent('');
+      setAdminNext('');
+      setAdminPassMsg('Contraseña cambiada. Solo tú podrás entrar.');
+    } catch (e) {
+      setAdminPassMsg(String(e));
     }
   };
 
@@ -445,6 +460,36 @@ export function AdminPanel() {
                   </motion.button>
                 </div>
                 {tokenMsg && <p className="text-xs text-primary-300 mt-2">{tokenMsg}</p>}
+              </div>
+
+              <div className="glass-card p-5 space-y-3">
+                <div className="flex items-center gap-2">
+                  <Lock size={14} className="text-amber-400" />
+                  <h4 className="text-sm font-semibold text-white">Contraseña de admin</h4>
+                </div>
+                <p className="text-xs text-dark-400 leading-relaxed">
+                  Solo quien la sepa entra al panel. Cámbiala aquí y nadie más podrá entrar aunque adivine la inicial.
+                </p>
+                <div className="grid grid-cols-1 md:grid-cols-[1fr_1fr_auto] gap-2">
+                  <input
+                    type="password"
+                    value={adminCurrent}
+                    onChange={(e) => setAdminCurrent(e.target.value)}
+                    placeholder="Actual"
+                    className="input-field text-xs"
+                  />
+                  <input
+                    type="password"
+                    value={adminNext}
+                    onChange={(e) => setAdminNext(e.target.value)}
+                    placeholder="Nueva (mín. 4)"
+                    className="input-field text-xs"
+                  />
+                  <motion.button whileTap={{ scale: 0.97 }} onClick={handleChangeAdminPassword} className="btn-primary text-xs flex items-center gap-2 shrink-0">
+                    <Save size={13} /> Cambiar
+                  </motion.button>
+                </div>
+                {adminPassMsg && <p className="text-xs text-primary-300 mt-2">{adminPassMsg}</p>}
               </div>
 
               <div className="glass-card p-5 space-y-3">

@@ -54,6 +54,7 @@ pub fn run() {
             instance::sync_and_launch,
             instance::install_instance,
             instance::admin_login,
+            instance::change_admin_password,
             mods_cmd::add_mod_local,
             mods_cmd::remove_mod,
             mods_cmd::toggle_mod,

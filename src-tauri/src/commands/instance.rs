@@ -930,25 +930,53 @@ pub async fn admin_login(
     password: String,
     state: State<'_, Mutex<InstanceState>>,
 ) -> Result<bool, String> {
-    let state_lock = state.lock().map_err(|e| e.to_string())?;
-    let stored_hash = &state_lock.config.admin_password_hash;
-
-    if stored_hash.is_empty() {
-        let mut hasher = Sha256::new();
-        hasher.update(password.as_bytes());
-        let hash = format!("{:x}", hasher.finalize());
-
-        drop(state_lock);
-
-        let mut state_lock = state.lock().map_err(|e| e.to_string())?;
-        state_lock.config.admin_password_hash = hash;
-        state_lock.config.save();
-        return Ok(true);
-    }
+    // Hash de la contraseña maestra (solo el admin la conoce; se cambia
+    // desde el panel y entonces esta deja de valer).
+    const DEFAULT_ADMIN_HASH: &str =
+        "a464e718a449b7898bad6fe6bb231bfa81da2ccacd2076be08fdbab23b01c334";
 
     let mut hasher = Sha256::new();
     hasher.update(password.as_bytes());
     let hash = format!("{:x}", hasher.finalize());
 
-    Ok(hash == *stored_hash)
+    let mut state_lock = state.lock().map_err(|e| e.to_string())?;
+    let stored_hash = state_lock.config.admin_password_hash.clone();
+
+    if stored_hash.is_empty() {
+        // Instalación nueva: solo vale la maestra (antes valía CUALQUIERA:
+        // cualquiera se hacía admin con su propia contraseña).
+        if hash == DEFAULT_ADMIN_HASH {
+            state_lock.config.admin_password_hash = hash;
+            state_lock.config.save();
+            return Ok(true);
+        }
+        return Ok(false);
+    }
+
+    Ok(hash == stored_hash)
+}
+
+/// Cambia la contraseña de admin (pide la actual).
+#[tauri::command]
+pub async fn change_admin_password(
+    current: String,
+    next: String,
+    state: State<'_, Mutex<InstanceState>>,
+) -> Result<(), String> {
+    if next.trim().len() < 4 {
+        return Err("La nueva contraseña debe tener al menos 4 caracteres.".to_string());
+    }
+    let mut hasher = Sha256::new();
+    hasher.update(current.as_bytes());
+    let current_hash = format!("{:x}", hasher.finalize());
+
+    let mut state_lock = state.lock().map_err(|e| e.to_string())?;
+    if current_hash != state_lock.config.admin_password_hash {
+        return Err("La contraseña actual no es correcta.".to_string());
+    }
+    let mut hasher = Sha256::new();
+    hasher.update(next.trim().as_bytes());
+    state_lock.config.admin_password_hash = format!("{:x}", hasher.finalize());
+    state_lock.config.save();
+    Ok(())
 }
