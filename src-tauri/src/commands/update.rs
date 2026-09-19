@@ -36,6 +36,50 @@ fn valid_version(v: &str) -> bool {
     parts.len() == 3 && parts.iter().all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()))
 }
 
+/// Log de diagnóstico del botón Subir (%TEMP%\ltc-release-button.log).
+fn button_log(msg: &str) {
+    use std::io::Write as _;
+    let path = std::env::temp_dir().join("ltc-release-button.log");
+    let line = format!("[{}] {}\n", chrono::Utc::now().to_rfc3339(), msg);
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
+        let _ = f.write_all(line.as_bytes());
+    }
+}
+
+/// Prueba aislada: abre una ventana aparte SIN tocar archivos ni compilar.
+/// Si esta sobrevive y el launcher sigue abierto, el mecanismo de ventana
+/// está bien y el problema está en el flujo del build.
+#[tauri::command]
+pub async fn test_release_window() -> Result<String, String> {
+    button_log("test: intento abrir ventana de prueba");
+    let mut cmd = std::process::Command::new("cmd");
+    cmd.args([
+        "/c",
+        "start",
+        "LTC Test",
+        "cmd",
+        "/k",
+        "echo Ventana de prueba OK. El launcher debe seguir abierto. Cierra esta ventana cuando quieras.",
+    ]);
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    match cmd.spawn() {
+        Ok(child) => {
+            button_log(&format!("test: ventana abierta pid={}", child.id()));
+            Ok("Ventana de prueba abierta.".to_string())
+        }
+        Err(e) => {
+            button_log(&format!("test: FALLO spawn: {}", e));
+            Err(format!("No se pudo abrir la ventana de prueba: {}", e))
+        }
+    }
+}
+
 /// Compila el instalador y publica el release en GitHub con tu token,
 /// en UNA VENTANA APARTE (nueva consola). Tiene que ser así porque al
 /// cambiar la versión, `tauri dev` reinicia el launcher y mataría el
@@ -88,6 +132,7 @@ pub async fn start_publish_release(
     // fuera del árbol de procesos del launcher: ni el reinicio de
     // `tauri dev`, ni un tree-kill, ni el job de consola pueden arrastrarla.
     // cmd termina al instante; la ventana vive por su cuenta.
+    button_log(&format!("subir: version={} notes_len={}", version, notes_arg.len()));
     let mut cmd = std::process::Command::new("cmd");
     cmd.args([
         "/c",
@@ -110,14 +155,18 @@ pub async fn start_publish_release(
         .stderr(Stdio::null());
 
     match cmd.spawn() {
-        Ok(_) => {
+        Ok(child) => {
+            button_log(&format!("subir: ventana abierta pid={}", child.id()));
             let _ = app_handle.emit(
                 "release-done",
                 serde_json::json!({ "ok": true, "message": "Ventana de publicación abierta: NO la cierres, ahí sale el progreso. El launcher se reiniciará solo a mitad (es normal) y volverá." }),
             );
             Ok("Ventana de publicación abierta.".to_string())
         }
-        Err(e) => Err(format!("No se pudo abrir la ventana de publicación: {}", e)),
+        Err(e) => {
+            button_log(&format!("subir: FALLO spawn: {}", e));
+            Err(format!("No se pudo abrir la ventana de publicación: {}", e))
+        }
     }
 }
 

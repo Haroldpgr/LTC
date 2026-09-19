@@ -429,14 +429,31 @@ export function AdminPanel() {
                     className="input-field text-xs"
                   />
                 </div>
-                <motion.button
-                  whileTap={{ scale: 0.97 }}
-                  onClick={handleStartRelease}
-                  disabled={relRunning}
-                  className="btn-primary text-xs flex items-center gap-2 disabled:opacity-50"
-                >
-                  <Upload size={13} /> {relRunning ? 'Publicando...' : 'Compilar y subir release'}
-                </motion.button>
+                <div className="flex gap-2 flex-wrap">
+                  <motion.button
+                    whileTap={{ scale: 0.97 }}
+                    onClick={handleStartRelease}
+                    disabled={relRunning}
+                    className="btn-primary text-xs flex items-center gap-2 disabled:opacity-50"
+                  >
+                    <Upload size={13} /> {relRunning ? 'Publicando...' : 'Compilar y subir release'}
+                  </motion.button>
+                  <motion.button
+                    whileTap={{ scale: 0.97 }}
+                    onClick={async () => {
+                      try {
+                        const msg = await invoke<string>('test_release_window');
+                        setRelResult(`${msg} Si sigue abierta y el launcher también, el mecanismo está bien.`);
+                      } catch (e) {
+                        setRelResult(String(e));
+                      }
+                    }}
+                    className="btn-secondary text-xs flex items-center gap-2"
+                    title="Abre una ventana de prueba sin compilar nada, para aislar el fallo"
+                  >
+                    Probar ventana
+                  </motion.button>
+                </div>
                 {relResult && <p className="text-xs text-primary-300">{relResult}</p>}
                 {relLog.length > 0 && (
                   <div className="bg-dark-950/90 border border-white/10 rounded-lg p-3 max-h-48 overflow-y-auto font-mono text-[10px] text-dark-300 space-y-0.5">
