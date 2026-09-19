@@ -4,7 +4,7 @@ import { InstanceCard } from '@/components/home/InstanceCard';
 import { InstanceDetail } from '@/components/instance/InstanceDetail';
 import { ContentBrowser } from '@/components/content/ContentBrowser';
 import { SkinStudio } from '@/components/skins/SkinStudio';
-import { Package, Shield, Zap, Server, Download, Layers, Gamepad2, Sparkles } from 'lucide-react';
+import { Package, Shield, Zap, Server, Download, Layers, Gamepad2, Sparkles, Megaphone, X } from 'lucide-react';
 import { AnimatedLogo } from '@/components/common/AnimatedLogo';
 
 export function MainContent() {
@@ -12,6 +12,8 @@ export function MainContent() {
   const selectedInstance = useInstanceStore((s) => s.selectedInstance);
   const activeTab = useInstanceStore((s) => s.activeTab);
   const launcherState = useInstanceStore((s) => s.launcherState);
+  const activeNotice = useInstanceStore((s) => s.activeNotice);
+  const dismissNotice = useInstanceStore((s) => s.dismissNotice);
 
   if (selectedInstance) {
     return <InstanceDetail key={selectedInstance.id} />;
@@ -47,6 +49,19 @@ export function MainContent() {
       {launcherState.error && (
         <div className="px-6 py-2 bg-red-500/10 border-b border-red-500/20">
           <p className="text-xs text-red-400">{launcherState.error}</p>
+        </div>
+      )}
+
+      {activeNotice && (
+        <div className="px-6 py-2 bg-amber-500/10 border-b border-amber-500/25 flex items-center gap-2">
+          <Megaphone size={14} className="text-amber-400 shrink-0" />
+          <p className="text-xs text-amber-200 flex-1 min-w-0">
+            <span className="font-bold">{activeNotice.title}</span>
+            {activeNotice.body && <span className="text-amber-200/80"> — {activeNotice.body}</span>}
+          </p>
+          <button onClick={dismissNotice} className="p-1 hover:bg-white/5 rounded-lg text-dark-400 hover:text-white transition-colors" title="Descartar">
+            <X size={13} />
+          </button>
         </div>
       )}
 

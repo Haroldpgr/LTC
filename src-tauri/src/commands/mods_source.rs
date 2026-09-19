@@ -1072,11 +1072,94 @@ pub async fn publish_catalog(
         notify_realtime_bump(&sb_url, &sb_service).await?;
     }
 
+    // Filas vivas (instancias + estados): manda Supabase si hay service key.
+    if !sb_url.trim().is_empty() && !sb_service.trim().is_empty() {
+        push_supabase_rows(&sb_url, &sb_service, &fresh).await?;
+    }
+
     Ok(format!(
         "Publicado: {} instancias oficiales y {} packs de mods. Ya les sale solo a todos.",
         fresh.len(),
         packs
     ))
+}
+
+/// Sube instancias y estados de mods a las tablas vivas.
+async fn push_supabase_rows(
+    sb_url: &str,
+    service_key: &str,
+    officials: &[InstanceConfig],
+) -> Result<(), String> {
+    let root = sb_url.trim_end_matches('/');
+    let client = gh_client()?;
+    let apikey = service_key.trim();
+    let auth = format!("Bearer {}", apikey);
+
+    // Instancias completas.
+    let rows: Vec<serde_json::Value> = officials
+        .iter()
+        .map(|c| {
+            serde_json::json!({ "id": c.id, "data": c, "updated_at": now_iso() })
+        })
+        .collect();
+    if !rows.is_empty() {
+        let resp = client
+            .post(format!("{}/rest/v1/instances", root))
+            .header("apikey", apikey)
+            .header("Authorization", &auth)
+            .header("Content-Type", "application/json")
+            .header("Prefer", "resolution=merge-duplicates")
+            .json(&rows)
+            .send()
+            .await
+            .map_err(|e| format!("Supabase no responde: {}", e))?;
+        if !resp.status().is_success() {
+            return Err(format!("Supabase rechazó las instancias ({})", resp.status()));
+        }
+    }
+
+    // Estados de mods: reemplazar los de cada instancia.
+    for cfg in officials {
+        let del = format!(
+            "{}/rest/v1/mod_states?instance_id=eq.{}",
+            root, cfg.id
+        );
+        let _ = client
+            .delete(&del)
+            .header("apikey", apikey)
+            .header("Authorization", &auth)
+            .send()
+            .await;
+        let states: Vec<serde_json::Value> = cfg
+            .mods
+            .iter()
+            .map(|m| {
+                serde_json::json!({
+                    "instance_id": cfg.id,
+                    "filename": m.filename,
+                    "enabled": m.enabled,
+                    "updated_at": now_iso(),
+                })
+            })
+            .collect();
+        if states.is_empty() {
+            continue;
+        }
+        let resp = client
+            .post(format!("{}/rest/v1/mod_states", root))
+            .header("apikey", apikey)
+            .header("Authorization", &auth)
+            .header("Content-Type", "application/json")
+            .json(&states)
+            .send()
+            .await
+            .map_err(|e| format!("Supabase no responde: {}", e))?;
+        if !resp.status().is_success() {
+            return Err(format!("Supabase rechazó los estados ({})", resp.status()));
+        }
+    }
+
+    Ok(())
 }
 
 /// Avisa por Supabase de que hay catálogo nuevo (tabla catalog_state, id=1).
@@ -1218,4 +1301,255 @@ pub async fn sync_catalog(
         "realtimeUrl": rt_url,
         "realtimeAnon": rt_anon,
     }))
+}
+
+// ---------------------------------------------------------------------------
+// Tablas vivas (Supabase): instancias, estados de mods y avisos.
+// GitHub sigue como respaldo; si Supabase responde, manda él.
+// ---------------------------------------------------------------------------
+
+async fn sb_get(
+    client: &reqwest::Client,
+    anon: &str,
+    url: String,
+) -> Result<serde_json::Value, String> {
+    let resp = client
+        .get(url)
+        .header("apikey", anon)
+        .header("Authorization", format!("Bearer {}", anon))
+        .send()
+        .await
+        .map_err(|e| format!("Supabase no responde: {}", e))?;
+    if !resp.status().is_success() {
+        return Err(format!("Supabase devolvió {}", resp.status()));
+    }
+    resp.json()
+        .await
+        .map_err(|e| format!("Respuesta inválida: {}", e))
+}
+
+/// Aplica una configuración remota sobre la local (misma regla que el
+/// catálogo: se preservan RAM/JVM y el estado de instalación salvo cambio
+/// de motor). Devuelve true si cambió algo.
+fn apply_remote_config(base: &PathBuf, remote: InstanceConfig) -> Result<bool, String> {
+    let mut remote = remote;
+    remote.official = true;
+    match InstanceConfig::load(base, &remote.id) {
+        Some(mut local) => {
+            let needs_reinstall = local.mc_version != remote.mc_version
+                || local.mod_loader != remote.mod_loader
+                || local.mod_loader_version != remote.mod_loader_version
+                || local.java_version != remote.java_version;
+            let keep_ram_min = local.ram_min.clone();
+            let keep_ram_max = local.ram_max.clone();
+            let keep_jvm = local.jvm_args.clone();
+            let was_installed = local.is_installed;
+            let before = serde_json::to_value(&local).unwrap_or_default();
+            local = remote;
+            local.ram_min = keep_ram_min;
+            local.ram_max = keep_ram_max;
+            local.jvm_args = keep_jvm;
+            local.is_installed = if needs_reinstall { false } else { was_installed };
+            if serde_json::to_value(&local).unwrap_or_default() != before {
+                local.save(base)?;
+                Ok(true)
+            } else {
+                Ok(false)
+            }
+        }
+        None => {
+            remote.is_installed = false;
+            remote.save(base)?;
+            Ok(true)
+        }
+    }
+}
+
+/// Aplica un estado activado/desactivado a un mod (archivo + config).
+fn apply_mod_state(
+    base: &PathBuf,
+    instance_id: &str,
+    filename: &str,
+    enabled: bool,
+) -> Result<bool, String> {
+    let Some(mut cfg) = InstanceConfig::load(base, instance_id) else {
+        return Ok(false);
+    };
+    let mods_dir = InstanceConfig::mods_dir(base, instance_id);
+    let jar = mods_dir.join(filename);
+    let dis = mods_dir.join(format!("{}.disabled", filename));
+    let mut changed = false;
+    if enabled {
+        if dis.is_file() {
+            let _ = std::fs::rename(&dis, &jar);
+            changed = true;
+        }
+        if let Some(m) = cfg.mods.iter_mut().find(|m| m.filename == filename) {
+            if !m.enabled {
+                m.enabled = true;
+                changed = true;
+            }
+        }
+    } else if jar.is_file() {
+        let _ = std::fs::rename(&jar, &dis);
+        changed = true;
+        if let Some(m) = cfg.mods.iter_mut().find(|m| m.filename == filename) {
+            if m.enabled {
+                m.enabled = false;
+                changed = true;
+            }
+        }
+    }
+    if changed {
+        cfg.save(base)?;
+    }
+    Ok(changed)
+}
+
+/// Lee las tablas vivas y las aplica: instancias, estados de mods y último
+/// aviso. Devuelve { instancesChanged, modsChanged, notice }.
+/// Si Supabase no responde, error (el llamador usa el catálogo de GitHub).
+#[tauri::command]
+pub async fn sync_supabase_data(
+    url: String,
+    anon_key: String,
+    state: State<'_, Mutex<InstanceState>>,
+) -> Result<serde_json::Value, String> {
+    let base = {
+        let inst_state = state.lock().map_err(|e| e.to_string())?;
+        inst_state.config.instances_dir.clone()
+    };
+    let url = url.trim().trim_end_matches('/').to_string();
+    let anon = anon_key.trim().to_string();
+    if url.is_empty() || anon.is_empty() {
+        return Err("Sin realtime configurado.".to_string());
+    }
+    let client = reqwest::Client::builder()
+        .user_agent("LTC-Launcher")
+        .timeout(std::time::Duration::from_secs(25))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    // 1. Instancias oficiales.
+    let rows: Vec<serde_json::Value> = serde_json::from_value(
+        sb_get(
+            &client,
+            &anon,
+            format!("{}/rest/v1/instances?select=id,data", url),
+        )
+        .await?,
+    )
+    .map_err(|e| format!("Instancias inválidas: {}", e))?;
+    let mut instances_changed = 0usize;
+    let mut seen: Vec<String> = Vec::new();
+    for row in &rows {
+        let Some(id) = row.get("id").and_then(|i| i.as_str()) else {
+            continue;
+        };
+        let Some(data) = row.get("data") else {
+            continue;
+        };
+        let remote: InstanceConfig = serde_json::from_value(data.clone())
+            .map_err(|e| format!("Instancia inválida: {}", e))?;
+        seen.push(id.to_string());
+        if apply_remote_config(&base, remote)? {
+            instances_changed += 1;
+        }
+    }
+    for mut local in list_local_instances(&base) {
+        if local.official && !seen.contains(&local.id) {
+            local.official = false;
+            local.save(&base)?;
+            instances_changed += 1;
+        }
+    }
+
+    // 2. Estados de mods.
+    let states: Vec<serde_json::Value> = serde_json::from_value(
+        sb_get(
+            &client,
+            &anon,
+            format!(
+                "{}/rest/v1/mod_states?select=instance_id,filename,enabled",
+                url
+            ),
+        )
+        .await?,
+    )
+    .map_err(|e| format!("Estados inválidos: {}", e))?;
+    let mut mods_changed = 0usize;
+    for s in &states {
+        let (Some(iid), Some(fname), Some(en)) = (
+            s.get("instance_id").and_then(|v| v.as_str()),
+            s.get("filename").and_then(|v| v.as_str()),
+            s.get("enabled").and_then(|v| v.as_bool()),
+        ) else {
+            continue;
+        };
+        if apply_mod_state(&base, iid, fname, en)? {
+            mods_changed += 1;
+        }
+    }
+
+    // 3. Último aviso.
+    let mut notice = serde_json::Value::Null;
+    if let Ok(n) = sb_get(
+        &client,
+        &anon,
+        format!(
+            "{}/rest/v1/notices?select=id,title,body,created_at&order=created_at.desc&limit=1",
+            url
+        ),
+    )
+    .await
+    {
+        if let Some(first) = n.as_array().and_then(|a| a.first()) {
+            notice = first.clone();
+        }
+    }
+
+    Ok(serde_json::json!({
+        "instancesChanged": instances_changed,
+        "modsChanged": mods_changed,
+        "notice": notice,
+    }))
+}
+
+/// Publica un aviso para todos los usuarios (llega al instante).
+#[tauri::command]
+pub async fn publish_notice(
+    title: String,
+    body: String,
+    state: State<'_, Mutex<InstanceState>>,
+) -> Result<String, String> {
+    let (sb_url, sb_service) = {
+        let state_lock = state.lock().map_err(|e| e.to_string())?;
+        (
+            state_lock.config.supabase_url.clone(),
+            state_lock.config.supabase_service_key.clone(),
+        )
+    };
+    if sb_url.trim().is_empty() || sb_service.trim().is_empty() {
+        return Err("Configura Supabase (URL + service_role) para publicar avisos.".to_string());
+    }
+    if title.trim().is_empty() {
+        return Err("El aviso necesita un título.".to_string());
+    }
+    let client = gh_client()?;
+    let resp = client
+        .post(format!(
+            "{}/rest/v1/notices",
+            sb_url.trim_end_matches('/')
+        ))
+        .header("apikey", sb_service.trim())
+        .header("Authorization", format!("Bearer {}", sb_service.trim()))
+        .header("Content-Type", "application/json")
+        .json(&serde_json::json!({ "title": title.trim(), "body": body.trim() }))
+        .send()
+        .await
+        .map_err(|e| format!("Supabase no responde: {}", e))?;
+    if !resp.status().is_success() {
+        return Err(format!("Supabase rechazó el aviso ({})", resp.status()));
+    }
+    Ok("Aviso publicado: les sale al instante.".to_string())
 }

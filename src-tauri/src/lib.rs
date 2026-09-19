@@ -73,6 +73,8 @@ pub fn run() {
             mods_source::sync_mods_source_now,
             mods_source::publish_catalog,
             mods_source::sync_catalog,
+            mods_source::sync_supabase_data,
+            mods_source::publish_notice,
             mods_source::set_github_token,
             mods_source::has_github_token,
             mods_source::set_supabase_config,

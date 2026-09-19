@@ -4,7 +4,7 @@ import { getVersion } from '@tauri-apps/api/app';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   ArrowLeft, Plus, Trash2, Edit3, Package, Server, Save, X,
-  Upload, Gamepad2, Shield, Cpu, ImagePlus, Share2, Rocket, Zap,
+  Upload, Gamepad2, Shield, Cpu, ImagePlus, Share2, Rocket, Zap, Megaphone,
 } from 'lucide-react';
 import { useInstanceStore } from '@/stores/instanceStore';
 import { open } from '@tauri-apps/plugin-dialog';
@@ -88,6 +88,9 @@ export function AdminPanel() {
   const [sbService, setSbService] = useState('');
   const [sbMsg, setSbMsg] = useState('');
   const [sbReady, setSbReady] = useState(false);
+  const [noticeTitle, setNoticeTitle] = useState('');
+  const [noticeBody, setNoticeBody] = useState('');
+  const [noticeMsg, setNoticeMsg] = useState('');
   const [form, setForm] = useState({
     name: '', description: '', icon: '⛏️', mcVersion: '1.20.1',
     modLoader: 'forge' as 'forge' | 'fabric' | 'none', modLoaderVersion: '47.4.10',
@@ -486,6 +489,52 @@ export function AdminPanel() {
                   <Save size={13} /> Guardar
                 </motion.button>
                 {sbMsg && <p className="text-xs text-primary-300 mt-2">{sbMsg}</p>}
+                <div className="pt-3 mt-1 border-t border-white/5 space-y-2">
+                  <label className="text-[11px] font-medium text-dark-400 block">
+                    Aviso instantáneo a todos (ej. mantenimiento, evento)
+                  </label>
+                  <div className="grid grid-cols-[160px_1fr_auto] gap-2">
+                    <input
+                      type="text"
+                      value={noticeTitle}
+                      onChange={(e) => setNoticeTitle(e.target.value)}
+                      placeholder="Título"
+                      className="input-field text-xs"
+                    />
+                    <input
+                      type="text"
+                      value={noticeBody}
+                      onChange={(e) => setNoticeBody(e.target.value)}
+                      placeholder="Mensaje (opcional)"
+                      className="input-field text-xs"
+                    />
+                    <motion.button
+                      whileTap={{ scale: 0.97 }}
+                      onClick={async () => {
+                        setNoticeMsg('');
+                        if (!noticeTitle.trim()) {
+                          setNoticeMsg('Pon un título al aviso.');
+                          return;
+                        }
+                        try {
+                          const msg = await invoke<string>('publish_notice', {
+                            title: noticeTitle.trim(),
+                            body: noticeBody.trim(),
+                          });
+                          setNoticeTitle('');
+                          setNoticeBody('');
+                          setNoticeMsg(msg);
+                        } catch (e) {
+                          setNoticeMsg(String(e));
+                        }
+                      }}
+                      className="btn-secondary text-xs flex items-center gap-2 shrink-0"
+                    >
+                      <Megaphone size={13} /> Avisar
+                    </motion.button>
+                  </div>
+                  {noticeMsg && <p className="text-xs text-primary-300">{noticeMsg}</p>}
+                </div>
               </div>
             </motion.div>
           )}

@@ -44,6 +44,9 @@ interface InstanceStore {
   syncCatalog: () => Promise<number>;
   onRealtimeCatalog: () => Promise<void>;
   initRealtime: () => void;
+  activeNotice: { id: number; title: string; body: string } | null;
+  dismissNotice: () => void;
+  syncSupabase: () => Promise<void>;
 }
 
 export interface SavedAccount {
@@ -98,6 +101,7 @@ export const useInstanceStore = create<InstanceStore>((set, get) => {
     contentSource: 'modrinth',
     runningInstanceId: null,
     savedAccounts: [],
+    activeNotice: null,
 
     loadInstances: async () => {
       try {
@@ -300,14 +304,49 @@ export const useInstanceStore = create<InstanceStore>((set, get) => {
       }
     },
     onRealtimeCatalog: async () => {
-      // Llega push de Supabase: recargar catálogo + mods y avisar.
-      const changed = await get().syncCatalog();
+      // Push de Supabase: tablas vivas + packs, y aviso si hubo cambios.
+      await get().syncSupabase();
       await get().syncOfficialSources().catch(() => {});
-      if (changed > 0) {
-        set((state) => ({
-          launcherState: { ...state.launcherState, statusMessage: 'Contenido del servidor actualizado en tiempo real' },
-        }));
+    },
+    dismissNotice: () => {
+      const { activeNotice } = get();
+      if (activeNotice) {
+        try {
+          localStorage.setItem('ltc-notice-dismissed', String(activeNotice.id));
+        } catch { /* noop */ }
       }
+      set({ activeNotice: null });
+    },
+    syncSupabase: async () => {
+      // Lee instancias, estados de mods y avisos de las tablas vivas.
+      // Si no hay credenciales o red, no hace nada (GitHub cubre).
+      let creds: { url?: string; anon?: string } = {};
+      try {
+        creds = JSON.parse(localStorage.getItem('ltc-realtime') || '{}');
+      } catch { /* noop */ }
+      if (!creds.url || !creds.anon) return;
+      try {
+        const res = await invoke<{
+          instancesChanged: number;
+          modsChanged: number;
+          notice: { id: number; title: string; body?: string } | null;
+        }>('sync_supabase_data', { url: creds.url, anonKey: creds.anon });
+        if (res.instancesChanged > 0 || res.modsChanged > 0) {
+          await get().loadInstances();
+          set((state) => ({
+            launcherState: { ...state.launcherState, statusMessage: 'Contenido del servidor actualizado en tiempo real' },
+          }));
+        }
+        if (res.notice && typeof res.notice.id === 'number') {
+          let dismissed = '';
+          try {
+            dismissed = localStorage.getItem('ltc-notice-dismissed') || '';
+          } catch { /* noop */ }
+          if (String(res.notice.id) !== dismissed) {
+            set({ activeNotice: { id: res.notice.id, title: res.notice.title || 'Aviso', body: res.notice.body || '' } });
+          }
+        }
+      } catch { /* noop */ }
     },
     initRealtime: () => {
       // Reconecta el push con las últimas credenciales conocidas.

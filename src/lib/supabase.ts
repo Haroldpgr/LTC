@@ -4,11 +4,24 @@ let channel: RealtimeChannel | null = null;
 let channelKey = '';
 
 /**
- * Suscripción al aviso de catálogo nuevo (tabla catalog_state).
- * Al publicarse algo, llama a onCatalog: el launcher recarga instancias
- * y mods al instante, sin que el usuario haga nada.
- * Si ya está suscrito con las mismas credenciales, no hace nada.
+ * Suscripción a las tablas vivas (catalog_state, instances, mod_states,
+ * notices). Al publicarse algo, llama a onCatalog: el launcher recarga
+ * instancias, mods y avisos al instante, sin que el usuario haga nada.
+ * Con debounce: varios eventos seguidos provocan una sola recarga.
  */
+let debounce: ReturnType<typeof setTimeout> | null = null;
+function debounced(cb: () => void) {
+  if (debounce) clearTimeout(debounce);
+  debounce = setTimeout(() => {
+    debounce = null;
+    try {
+      cb();
+    } catch {
+      /* noop */
+    }
+  }, 800);
+}
+
 export function ensureRealtime(url: string, anonKey: string, onCatalog: () => void) {
   if (!url || !anonKey) return;
   const key = `${url}|${anonKey.slice(0, 12)}`;
@@ -23,14 +36,12 @@ export function ensureRealtime(url: string, anonKey: string, onCatalog: () => vo
   }
   try {
     const client = createClient(url, anonKey);
-    const ch = client.channel('ltc-catalog');
-    ch.on('postgres_changes', { event: '*', schema: 'public', table: 'catalog_state' }, () => {
-      try {
-        onCatalog();
-      } catch {
-        /* noop */
-      }
-    });
+    const ch = client.channel('ltc-live');
+    const fire = () => debounced(onCatalog);
+    ch.on('postgres_changes', { event: '*', schema: 'public', table: 'catalog_state' }, fire);
+    ch.on('postgres_changes', { event: '*', schema: 'public', table: 'instances' }, fire);
+    ch.on('postgres_changes', { event: '*', schema: 'public', table: 'mod_states' }, fire);
+    ch.on('postgres_changes', { event: '*', schema: 'public', table: 'notices' }, fire);
     ch.subscribe();
     channel = ch;
     channelKey = key;

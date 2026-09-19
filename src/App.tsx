@@ -15,6 +15,7 @@ export default function App() {
   const checkSession = useAuthStore((s) => s.checkSession);
   const loadInstances = useInstanceStore((s) => s.loadInstances);
   const syncCatalog = useInstanceStore((s) => s.syncCatalog);
+  const syncSupabase = useInstanceStore((s) => s.syncSupabase);
   const initRealtime = useInstanceStore((s) => s.initRealtime);
   const syncOfficialSources = useInstanceStore((s) => s.syncOfficialSources);
   const isAdmin = useInstanceStore((s) => s.isAdmin);
@@ -38,10 +39,11 @@ export default function App() {
         initRealtime();
         await loadInstances();
         await syncCatalog();
+        await syncSupabase().catch(() => {});
         syncOfficialSources().catch(() => {});
       })();
     }
-  }, [account, initRealtime, loadInstances, syncCatalog, syncOfficialSources]);
+  }, [account, initRealtime, loadInstances, syncCatalog, syncSupabase, syncOfficialSources]);
 
   return (
     <div className="h-screen w-screen flex flex-col overflow-hidden select-none bg-dark-950">
