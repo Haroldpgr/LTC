@@ -8,6 +8,7 @@
 //   npm run publish:update -- "Notas de la versión"
 //   npm run publish:update -- --version=1.1.0 "Notas de la versión"
 //   GITHUB_TOKEN=xxx npm run publish:update -- --version=1.1.0 "Notas"
+//   npm run publish:update -- --skip-build  (reintenta solo la subida)
 //   (sin versión ni notas, te las pregunta)
 //
 // El token también lo pone solo el botón "Compilar y subir release"
@@ -28,9 +29,10 @@ const sh = (cmd, opts = {}) => execSync(cmd, { cwd: root, shell: true, ...opts }
 const shOut = (cmd, opts = {}) =>
   execSync(cmd, { cwd: root, shell: true, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'], ...opts }).trim();
 
-// --- Flags: --version=X.Y.Z --api-token=... ---
+// --- Flags: --version=X.Y.Z --api-token=... --skip-build ---
 let rawArgs = process.argv.slice(2);
 let bumpVersion = null;
+let skipBuild = false;
 let apiToken = process.env.GITHUB_TOKEN || null;
 rawArgs = rawArgs.filter((a) => {
   let m = a.match(/^--version=(.+)$/);
@@ -41,6 +43,10 @@ rawArgs = rawArgs.filter((a) => {
   m = a.match(/^--api-token=(.+)$/);
   if (m) {
     apiToken = m[1].trim();
+    return false;
+  }
+  if (a === '--skip-build') {
+    skipBuild = true;
     return false;
   }
   return true;
@@ -129,7 +135,9 @@ try {
 } catch { /* sin remote: modo manual */ }
 
 console.log(`[publish-update] Compilando instalador v${version}...`);
-if (process.platform === 'win32') {
+if (skipBuild) {
+  console.log('[publish-update] --skip-build: se reutiliza el instalador ya compilado.');
+} else if (process.platform === 'win32') {
   // En Windows usa el wrapper que firma los .exe bloqueados por WDAC (error 4551)
   execSync('powershell -ExecutionPolicy Bypass -File scripts/build-release.ps1', { cwd: root, stdio: 'inherit', shell: true });
 } else {
