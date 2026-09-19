@@ -296,6 +296,15 @@ pub async fn launch_instance(
     )
     .await?;
 
+    // Skin personalizada dentro del juego (no bloquea si falla)
+    let _ = crate::minecraft::skin::ensure_custom_skin(
+        &instance_dir,
+        &config,
+        &account.username,
+        account.skin_url.as_deref(),
+    )
+    .await;
+
     let mut cmd = Launcher::build_launch_command(
         &instance_dir,
         &config,
@@ -447,6 +456,15 @@ pub async fn sync_and_launch(
         &config.mc_version,
     )
     .await?;
+
+    // Skin personalizada dentro del juego (no bloquea si falla)
+    let _ = crate::minecraft::skin::ensure_custom_skin(
+        &instance_dir,
+        &config,
+        &account.username,
+        account.skin_url.as_deref(),
+    )
+    .await;
 
     let mut cmd = Launcher::build_launch_command(
         &instance_dir,
