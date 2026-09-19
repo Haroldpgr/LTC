@@ -8,7 +8,6 @@ import {
 } from 'lucide-react';
 import { useInstanceStore } from '@/stores/instanceStore';
 import { open } from '@tauri-apps/plugin-dialog';
-import { listen } from '@tauri-apps/api/event';
 import { readFile } from '@tauri-apps/plugin-fs';
 import { InstanceIcon } from '@/components/common/InstanceIcon';
 import type { ModpackInstance } from '@/types';
@@ -84,11 +83,6 @@ export function AdminPanel() {
   const [githubToken, setGithubToken] = useState('');
   const [tokenMsg, setTokenMsg] = useState('');
   const [tokenReady, setTokenReady] = useState(false);
-  const [relVersion, setRelVersion] = useState('');
-  const [relNotes, setRelNotes] = useState('');
-  const [relLog, setRelLog] = useState<string[]>([]);
-  const [relRunning, setRelRunning] = useState(false);
-  const [relResult, setRelResult] = useState('');
   const [form, setForm] = useState({
     name: '', description: '', icon: '⛏️', mcVersion: '1.20.1',
     modLoader: 'forge' as 'forge' | 'fabric' | 'none', modLoaderVersion: '47.4.10',
@@ -238,50 +232,6 @@ export function AdminPanel() {
     }
   };
 
-  // Progreso de la publicación del release (eventos del backend)
-  useEffect(() => {
-    let unlistenLog: (() => void) | undefined;
-    let unlistenDone: (() => void) | undefined;
-    listen<{ line: string }>('release-log', (e) => {
-      setRelLog((prev) => [...prev.slice(-299), e.payload.line]);
-    }).then((f) => { unlistenLog = f; }).catch(() => {});
-    listen<{ ok: boolean; message: string }>('release-done', (e) => {
-      setRelRunning(false);
-      setRelResult(e.payload.message);
-    }).then((f) => { unlistenDone = f; }).catch(() => {});
-    return () => { unlistenLog?.(); unlistenDone?.(); };
-  }, []);
-
-  // Sugerir siguiente versión parche (1.0.1 -> 1.0.2)
-  useEffect(() => {
-    if (appVersion && !relVersion) {
-      const p = appVersion.split('.').map(Number);
-      if (p.length === 3 && p.every((n) => Number.isFinite(n))) {
-        setRelVersion(`${p[0] ?? 1}.${p[1] ?? 0}.${(p[2] ?? 0) + 1}`);
-      }
-    }
-  }, [appVersion, relVersion]);
-
-  const handleStartRelease = async () => {
-    setRelResult('');
-    if (!/^\d+\.\d+\.\d+$/.test(relVersion.trim())) {
-      setRelResult('Versión inválida: usa formato X.Y.Z (ej. 1.0.2).');
-      return;
-    }
-    setRelLog([]);
-    setRelRunning(true);
-    try {
-      const msg = await invoke<string>('start_publish_release', {
-        version: relVersion.trim(),
-        notes: relNotes.trim(),
-      });
-      setRelResult(msg);
-    } catch (e) {
-      setRelRunning(false);
-      setRelResult(String(e));
-    }
-  };
-
   const tabs = [
     { id: 'instances' as const, label: 'Instancias', icon: Gamepad2 },
     { id: 'create' as const, label: 'Nueva', icon: Plus },
@@ -406,62 +356,16 @@ export function AdminPanel() {
               <div className="glass-card p-5 space-y-3">
                 <div className="flex items-center gap-2">
                   <Upload size={14} className="text-primary-400" />
-                  <h4 className="text-sm font-semibold text-white">Subir release (compila y publica solo)</h4>
+                  <h4 className="text-sm font-semibold text-white">Subir release</h4>
                 </div>
                 <p className="text-xs text-dark-400 leading-relaxed">
-                  Elige versión y mensaje y pulsa Subir: se abre una ventana aparte que compila el instalador,
-                  crea el release en GitHub y sube instalador + update.json con tu token.
-                  El launcher puede cerrarse y reabrirse solo a mitad: es normal, el trabajo sigue en esa ventana.
+                  En la carpeta del proyecto, abre <span className="font-mono text-primary-300">scripts</span> y haz doble clic en <span className="font-mono text-primary-300">publish-release.ps1</span>:
+                  te pide versión y mensaje, compila el instalador y lo sube a GitHub solo con tu token, en su propia ventana.
                 </p>
-                <div className="grid grid-cols-[130px_1fr] gap-2">
-                  <input
-                    type="text"
-                    value={relVersion}
-                    onChange={(e) => setRelVersion(e.target.value)}
-                    placeholder="1.0.2"
-                    className="input-field text-xs font-mono"
-                  />
-                  <input
-                    type="text"
-                    value={relNotes}
-                    onChange={(e) => setRelNotes(e.target.value)}
-                    placeholder="Mensaje del release (notas para los usuarios)"
-                    className="input-field text-xs"
-                  />
-                </div>
-                <div className="flex gap-2 flex-wrap">
-                  <motion.button
-                    whileTap={{ scale: 0.97 }}
-                    onClick={handleStartRelease}
-                    disabled={relRunning}
-                    className="btn-primary text-xs flex items-center gap-2 disabled:opacity-50"
-                  >
-                    <Upload size={13} /> {relRunning ? 'Publicando...' : 'Compilar y subir release'}
-                  </motion.button>
-                  <motion.button
-                    whileTap={{ scale: 0.97 }}
-                    onClick={async () => {
-                      try {
-                        const msg = await invoke<string>('test_release_window');
-                        setRelResult(`${msg} Si sigue abierta y el launcher también, el mecanismo está bien.`);
-                      } catch (e) {
-                        setRelResult(String(e));
-                      }
-                    }}
-                    className="btn-secondary text-xs flex items-center gap-2"
-                    title="Abre una ventana de prueba sin compilar nada, para aislar el fallo"
-                  >
-                    Probar ventana
-                  </motion.button>
-                </div>
-                {relResult && <p className="text-xs text-primary-300">{relResult}</p>}
-                {relLog.length > 0 && (
-                  <div className="bg-dark-950/90 border border-white/10 rounded-lg p-3 max-h-48 overflow-y-auto font-mono text-[10px] text-dark-300 space-y-0.5">
-                    {relLog.map((line, i) => (
-                      <p key={i} className="break-all whitespace-pre-wrap">{line}</p>
-                    ))}
-                  </div>
-                )}
+                <ol className="text-xs text-dark-400 space-y-1.5 list-decimal list-inside">
+                  <li>Al abrir el launcher les sale el aviso con tu mensaje (la URL ya viene configurada de serie).</li>
+                  <li>Al aceptar, se descarga el instalador, se instala en silencio y el launcher se reinicia solo con los cambios.</li>
+                </ol>
               </div>
 
               <div className="glass-card p-5">

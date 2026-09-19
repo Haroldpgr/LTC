@@ -65,8 +65,6 @@ pub fn run() {
             update::set_update_url,
             update::download_update,
             update::apply_update_and_restart,
-            update::start_publish_release,
-            update::test_release_window,
             mods_source::set_mods_source_folder,
             mods_source::set_mods_source_archive,
             mods_source::set_mods_source_url,
