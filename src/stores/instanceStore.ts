@@ -3,6 +3,11 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import type { ModpackInstance, LauncherState, DownloadProgress } from '@/types';
 
+export interface SysLogLine {
+  t: string;
+  msg: string;
+}
+
 interface InstanceStore {
   instances: ModpackInstance[];
   selectedInstance: ModpackInstance | null;
@@ -47,6 +52,9 @@ interface InstanceStore {
   activeNotice: { id: number; title: string; body: string } | null;
   dismissNotice: () => void;
   syncSupabase: () => Promise<void>;
+  sysLog: SysLogLine[];
+  logSys: (msg: string) => void;
+  clearSysLog: () => void;
 }
 
 export interface SavedAccount {
@@ -59,17 +67,26 @@ export interface SavedAccount {
 let progressListenerRegistered = false;
 
 export const useInstanceStore = create<InstanceStore>((set, get) => {
+  const pushSys = (msg: string) => {
+    const t = new Date().toLocaleTimeString();
+    set((state) => ({ sysLog: [...state.sysLog.slice(-199), { t, msg }] }));
+  };
   if (!progressListenerRegistered) {
     progressListenerRegistered = true;
     listen<DownloadProgress>('download-progress', (event) => {
+      const p = event.payload;
       set((state) => ({
-        launcherState: { ...state.launcherState, downloadProgress: event.payload },
+        launcherState: { ...state.launcherState, downloadProgress: p },
       }));
+      if (p.percentage >= 100 || Math.round(p.percentage) % 25 === 0) {
+        pushSys(`Descarga ${p.fileName}: ${p.percentage.toFixed(0)}%`);
+      }
     }).catch(() => {});
     listen<{ message: string }>('install-status', (event) => {
       set((state) => ({
         launcherState: { ...state.launcherState, statusMessage: event.payload.message },
       }));
+      pushSys(event.payload.message);
     }).catch(() => {});
     listen<{ instanceId: string; code: number; earlyExit: boolean }>('game-exited', (event) => {
       const { instanceId, code, earlyExit } = event.payload;
@@ -84,6 +101,7 @@ export const useInstanceStore = create<InstanceStore>((set, get) => {
             : state.launcherState.error,
         },
       }));
+      pushSys(`Juego terminado (instancia ${instanceId}, código ${code}${earlyExit ? ', cierre temprano' : ''})`);
     }).catch(() => {});
   }
 
@@ -102,6 +120,9 @@ export const useInstanceStore = create<InstanceStore>((set, get) => {
     runningInstanceId: null,
     savedAccounts: [],
     activeNotice: null,
+    sysLog: [],
+    logSys: (msg) => pushSys(msg),
+    clearSysLog: () => set({ sysLog: [] }),
 
     loadInstances: async () => {
       try {
@@ -127,16 +148,19 @@ export const useInstanceStore = create<InstanceStore>((set, get) => {
         }));
         return;
       }
+      pushSys(`Jugar ${instanceId}: sincronizando mods y arrancando...`);
       set((state) => ({
         launcherState: { ...state.launcherState, isLaunching: true, statusMessage: 'Sincronizando mods...', error: null },
         runningInstanceId: instanceId,
       }));
       try {
         await invoke('sync_and_launch', { instanceId });
+        pushSys(`Juego en marcha (${instanceId}).`);
         set((state) => ({
           launcherState: { ...state.launcherState, isLaunching: false, statusMessage: 'Minecraft ejecutándose' },
         }));
       } catch (error) {
+        pushSys(`Error al jugar: ${String(error)}`);
         set((state) => ({
           launcherState: { ...state.launcherState, isLaunching: false, error: String(error), runningInstanceId: null },
         }));
@@ -280,9 +304,16 @@ export const useInstanceStore = create<InstanceStore>((set, get) => {
       return url;
     },
     publishCatalog: async () => {
-      const msg = await invoke<string>('publish_catalog');
-      await get().loadInstances();
-      return msg;
+      pushSys('Publicando contenido oficial...');
+      try {
+        const msg = await invoke<string>('publish_catalog');
+        pushSys(`Publicar OK: ${msg}`);
+        await get().loadInstances();
+        return msg;
+      } catch (e) {
+        pushSys(`Publicar falló: ${String(e)}`);
+        throw e;
+      }
     },
     syncCatalog: async () => {
       // Catálogo oficial del servidor: las instancias publicadas por el
@@ -290,7 +321,10 @@ export const useInstanceStore = create<InstanceStore>((set, get) => {
       // Además deja lista la suscripción de tiempo real (Supabase).
       try {
         const res = await invoke<{ changed: number; realtimeUrl: string; realtimeAnon: string }>('sync_catalog');
-        if (res.changed > 0) await get().loadInstances();
+        if (res.changed > 0) {
+          pushSys(`Catálogo: ${res.changed} instancias actualizadas.`);
+          await get().loadInstances();
+        }
         if (res.realtimeUrl && res.realtimeAnon) {
           try {
             localStorage.setItem('ltc-realtime', JSON.stringify({ url: res.realtimeUrl, anon: res.realtimeAnon }));

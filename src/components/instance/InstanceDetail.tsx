@@ -49,12 +49,17 @@ export function InstanceDetail() {
   const [resolvingIcons, setResolvingIcons] = useState(false);
   const [iconsMsg, setIconsMsg] = useState('');
 
-  const [logSource, setLogSource] = useState<'latest' | 'stdout' | 'stderr'>('latest');
+  const [logSource, setLogSource] = useState<'latest' | 'stdout' | 'stderr' | 'sistema'>('latest');
   const [logText, setLogText] = useState('');
   const [logLoading, setLogLoading] = useState(false);
   const logBoxRef = useRef<HTMLDivElement>(null);
+  const sysLog = useInstanceStore((s) => s.sysLog);
 
-  const fetchLog = async (src: 'latest' | 'stdout' | 'stderr') => {
+  const fetchLog = async (src: 'latest' | 'stdout' | 'stderr' | 'sistema') => {
+    if (src === 'sistema') {
+      setLogText(sysLog.map((l) => `[${l.t}] ${l.msg}`).join('\n'));
+      return;
+    }
     setLogLoading(true);
     try {
       const text = await invoke<string>('read_log_tail', {
@@ -72,6 +77,10 @@ export function InstanceDetail() {
 
   useEffect(() => {
     if (detailTab !== 'logs') return;
+    if (logSource === 'sistema') {
+      setLogText(sysLog.map((l) => `[${l.t}] ${l.msg}`).join('\n'));
+      return;
+    }
     fetchLog(logSource);
     const t = setInterval(() => fetchLog(logSource), 2000);
     return () => clearInterval(t);
@@ -82,6 +91,12 @@ export function InstanceDetail() {
     const el = logBoxRef.current;
     if (el) el.scrollTop = el.scrollHeight;
   }, [logText]);
+
+  useEffect(() => {
+    if (detailTab === 'logs' && logSource === 'sistema') {
+      setLogText(sysLog.map((l) => `[${l.t}] ${l.msg}`).join('\n'));
+    }
+  }, [detailTab, logSource, sysLog]);
 
   const [modsUrl, setModsUrl] = useState(instance.modsSource?.archiveUrl ?? '');
   const [modsMsg, setModsMsg] = useState('');
@@ -652,13 +667,14 @@ export function InstanceDetail() {
               <div className="flex items-center justify-between mb-3">
                 <div>
                   <h3 className="font-bold text-white text-sm">Consola y Registro de Ejecución</h3>
-                  <p className="text-xs text-dark-400">Salida en vivo del proceso de Minecraft (se actualiza sola)</p>
+                  <p className="text-xs text-dark-400">Juego y comunicaciones del launcher en vivo (se actualiza sola)</p>
                 </div>
                 <div className="flex items-center gap-1.5">
                   {([
                     { id: 'latest' as const, label: 'Juego' },
                     { id: 'stdout' as const, label: 'Salida' },
                     { id: 'stderr' as const, label: 'Errores' },
+                    { id: 'sistema' as const, label: 'Sistema' },
                   ]).map((s) => (
                     <button
                       key={s.id}
