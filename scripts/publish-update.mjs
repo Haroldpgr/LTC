@@ -96,14 +96,27 @@ const finalNotes = notes || `Actualización v${version}`;
 const tag = `v${version}`;
 
 // Lock anti doble ejecución (el botón del panel puede pulsarse dos veces).
+// Si el proceso dueño murió (ventana matada a mitad), el lock se considera
+// caducado y se sigue: se comprueba el PID guardado.
 const lockPath = join(root, 'src-tauri', 'target', 'release', '.publish-lock');
-try {
-  if (existsSync(lockPath) && Date.now() - statSync(lockPath).mtimeMs < 30 * 60 * 1000) {
-    console.error('[publish-update] Ya hay una publicación en curso. Espera a que termine.');
-    process.exit(1);
-  }
-  writeFileSync(lockPath, String(process.pid));
-} catch { /* sin lock: se sigue */ }
+function lockAlive() {
+  try {
+    if (!existsSync(lockPath)) return false;
+    const age = Date.now() - statSync(lockPath).mtimeMs;
+    let alive = true;
+    try {
+      const pid = parseInt(readFileSync(lockPath, 'utf-8').trim(), 10);
+      if (pid) process.kill(pid, 0);
+      else alive = false;
+    } catch { alive = false; }
+    return alive && age < 30 * 60 * 1000;
+  } catch { return false; }
+}
+if (lockAlive()) {
+  console.error('[publish-update] Ya hay una publicación en curso. Espera a que termine.');
+  process.exit(1);
+}
+try { writeFileSync(lockPath, String(process.pid)); } catch { /* sin lock: se sigue */ }
 const releaseLock = () => { try { rmSync(lockPath, { force: true }); } catch {} };
 process.on('exit', releaseLock);
 

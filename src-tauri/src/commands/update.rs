@@ -133,30 +133,42 @@ pub async fn start_publish_release(
     // `tauri dev`, ni un tree-kill, ni el job de consola pueden arrastrarla.
     // cmd termina al instante; la ventana vive por su cuenta.
     button_log(&format!("subir: version={} notes_len={}", version, notes_arg.len()));
-    let mut cmd = std::process::Command::new("cmd");
-    cmd.args([
-        "/c",
-        "start",
-        "LTC Release",
-        "powershell",
-        "-NoProfile",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-File",
-        &ps1.to_string_lossy().to_string(),
-        "-Version",
-        &version,
-        "-Notes",
-        &notes_arg,
-    ]);
-    cmd.current_dir(&root)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-
-    match cmd.spawn() {
-        Ok(child) => {
-            button_log(&format!("subir: ventana abierta pid={}", child.id()));
+    let build_cmd = |flags: Option<u32>| {
+        let mut cmd = std::process::Command::new("cmd");
+        cmd.args([
+            "/c",
+            "start",
+            "LTC Release",
+            "powershell",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            &ps1.to_string_lossy().to_string(),
+            "-Version",
+            &version,
+            "-Notes",
+            &notes_arg,
+        ]);
+        cmd.current_dir(&root)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        #[cfg(target_os = "windows")]
+        if let Some(fl) = flags {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(fl);
+        }
+        cmd.spawn().map(|c| c.id())
+    };
+    // BREAKAWAY_FROM_JOB | DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP:
+    // sale del job de `tauri dev` (si existe) para que su reinicio no
+    // arrastre a esta ventana. Si no esta permitido, reintento normal.
+    let spawned = build_cmd(Some(0x01000000 | 0x00000008 | 0x00000200))
+        .or_else(|_| build_cmd(None));
+    match spawned {
+        Ok(pid) => {
+            button_log(&format!("subir: ventana abierta pid={}", pid));
             let _ = app_handle.emit(
                 "release-done",
                 serde_json::json!({ "ok": true, "message": "Ventana de publicación abierta: NO la cierres, ahí sale el progreso. El launcher se reiniciará solo a mitad (es normal) y volverá." }),
