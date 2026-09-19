@@ -4,7 +4,7 @@ import { getVersion } from '@tauri-apps/api/app';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   ArrowLeft, Plus, Trash2, Edit3, Package, Server, Save, X,
-  Upload, Gamepad2, Shield, Cpu, ImagePlus, Share2, Rocket,
+  Upload, Gamepad2, Shield, Cpu, ImagePlus, Share2, Rocket, Zap,
 } from 'lucide-react';
 import { useInstanceStore } from '@/stores/instanceStore';
 import { open } from '@tauri-apps/plugin-dialog';
@@ -83,6 +83,11 @@ export function AdminPanel() {
   const [githubToken, setGithubToken] = useState('');
   const [tokenMsg, setTokenMsg] = useState('');
   const [tokenReady, setTokenReady] = useState(false);
+  const [sbUrl, setSbUrl] = useState('');
+  const [sbAnon, setSbAnon] = useState('');
+  const [sbService, setSbService] = useState('');
+  const [sbMsg, setSbMsg] = useState('');
+  const [sbReady, setSbReady] = useState(false);
   const [form, setForm] = useState({
     name: '', description: '', icon: '⛏️', mcVersion: '1.20.1',
     modLoader: 'forge' as 'forge' | 'fabric' | 'none', modLoaderVersion: '47.4.10',
@@ -216,6 +221,11 @@ export function AdminPanel() {
     try {
       setTokenReady(await invoke<boolean>('has_github_token'));
     } catch { /* noop */ }
+    try {
+      const st = await invoke<{ url: string; hasAnon: boolean; hasService: boolean }>('supabase_status');
+      setSbUrl(st.url || '');
+      setSbReady(!!(st.url && st.hasAnon && st.hasService));
+    } catch { /* noop */ }
   };
 
   const handleSaveToken = async () => {
@@ -231,6 +241,26 @@ export function AdminPanel() {
       setTokenMsg('Token guardado. Ya puedes publicar con un clic.');
     } catch (e) {
       setTokenMsg(String(e));
+    }
+  };
+
+  const handleSaveSupabase = async () => {
+    setSbMsg('');
+    try {
+      await invoke('set_supabase_config', {
+        url: sbUrl.trim(),
+        anonKey: sbAnon.trim(),
+        serviceKey: sbService.trim(),
+      });
+      setSbAnon('');
+      setSbService('');
+      const st = await invoke<{ url: string; hasAnon: boolean; hasService: boolean }>('supabase_status');
+      setSbUrl(st.url || '');
+      const ready = !!(st.url && st.hasAnon && st.hasService);
+      setSbReady(ready);
+      setSbMsg(ready ? 'Tiempo real activado. Al Publicar les llega al instante.' : 'Guardado parcial: faltan campos para activar el tiempo real.');
+    } catch (e) {
+      setSbMsg(String(e));
     }
   };
 
@@ -412,6 +442,50 @@ export function AdminPanel() {
                   </motion.button>
                 </div>
                 {tokenMsg && <p className="text-xs text-primary-300 mt-2">{tokenMsg}</p>}
+              </div>
+
+              <div className="glass-card p-5 space-y-3">
+                <div className="flex items-center gap-2">
+                  <Zap size={14} className="text-accent-400" />
+                  <h4 className="text-sm font-semibold text-white">Tiempo real (Supabase)</h4>
+                  {sbReady && (
+                    <span className="px-2 py-0.5 bg-emerald-500/15 text-emerald-400 border border-emerald-500/25 rounded-full text-[10px] font-bold">
+                      En vivo
+                    </span>
+                  )}
+                </div>
+                <p className="text-xs text-dark-400 leading-relaxed">
+                  Con esto, al Publicar les llega al instante aunque tengan el launcher abierto.
+                  Crea el proyecto gratis en <span className="font-mono">supabase.com</span>, ejecuta su SQL de la guía
+                  y pega aquí URL + claves (anon y service_role). La de servicio solo vive en tu PC.
+                </p>
+                <input
+                  type="text"
+                  value={sbUrl}
+                  onChange={(e) => setSbUrl(e.target.value)}
+                  placeholder="https://xyz.supabase.co"
+                  className="input-field text-xs font-mono"
+                />
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                  <input
+                    type="password"
+                    value={sbAnon}
+                    onChange={(e) => setSbAnon(e.target.value)}
+                    placeholder="Clave anon (vacío = conservar)"
+                    className="input-field text-xs font-mono"
+                  />
+                  <input
+                    type="password"
+                    value={sbService}
+                    onChange={(e) => setSbService(e.target.value)}
+                    placeholder="Clave service_role (vacío = conservar)"
+                    className="input-field text-xs font-mono"
+                  />
+                </div>
+                <motion.button whileTap={{ scale: 0.97 }} onClick={handleSaveSupabase} className="btn-primary text-xs flex items-center gap-2 shrink-0">
+                  <Save size={13} /> Guardar
+                </motion.button>
+                {sbMsg && <p className="text-xs text-primary-300 mt-2">{sbMsg}</p>}
               </div>
             </motion.div>
           )}

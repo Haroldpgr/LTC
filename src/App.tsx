@@ -15,6 +15,7 @@ export default function App() {
   const checkSession = useAuthStore((s) => s.checkSession);
   const loadInstances = useInstanceStore((s) => s.loadInstances);
   const syncCatalog = useInstanceStore((s) => s.syncCatalog);
+  const initRealtime = useInstanceStore((s) => s.initRealtime);
   const syncOfficialSources = useInstanceStore((s) => s.syncOfficialSources);
   const isAdmin = useInstanceStore((s) => s.isAdmin);
   const [showSplash, setShowSplash] = useState(true);
@@ -34,12 +35,13 @@ export default function App() {
       // (las instancias del admin aparecen solas) y sincronizar sus mods.
       // Todo en silencio, sin bloquear la interfaz.
       (async () => {
+        initRealtime();
         await loadInstances();
         await syncCatalog();
         syncOfficialSources().catch(() => {});
       })();
     }
-  }, [account, loadInstances, syncCatalog, syncOfficialSources]);
+  }, [account, initRealtime, loadInstances, syncCatalog, syncOfficialSources]);
 
   return (
     <div className="h-screen w-screen flex flex-col overflow-hidden select-none bg-dark-950">

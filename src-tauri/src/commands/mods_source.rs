@@ -532,6 +532,41 @@ pub fn has_github_token(state: State<'_, Mutex<InstanceState>>) -> Result<bool, 
     Ok(!state_lock.config.github_token.trim().is_empty())
 }
 
+/// Guarda la config de Supabase (tiempo real). Vacío = no se toca ese campo.
+#[tauri::command]
+pub fn set_supabase_config(
+    url: String,
+    anon_key: String,
+    service_key: String,
+    state: State<'_, Mutex<InstanceState>>,
+) -> Result<(), String> {
+    let mut state_lock = state.lock().map_err(|e| e.to_string())?;
+    if !url.is_empty() {
+        state_lock.config.supabase_url = url.trim().to_string();
+    }
+    if !anon_key.is_empty() {
+        state_lock.config.supabase_anon_key = anon_key.trim().to_string();
+    }
+    if !service_key.is_empty() {
+        state_lock.config.supabase_service_key = service_key.trim().to_string();
+    }
+    state_lock.config.save();
+    Ok(())
+}
+
+/// Estado de Supabase sin exponer secretos: url configurada, anon, servicio.
+#[tauri::command]
+pub fn supabase_status(
+    state: State<'_, Mutex<InstanceState>>,
+) -> Result<serde_json::Value, String> {
+    let state_lock = state.lock().map_err(|e| e.to_string())?;
+    Ok(serde_json::json!({
+        "url": state_lock.config.supabase_url.clone(),
+        "hasAnon": !state_lock.config.supabase_anon_key.trim().is_empty(),
+        "hasService": !state_lock.config.supabase_service_key.trim().is_empty(),
+    }))
+}
+
 /// Exporta los mods a un zip con el nombre dado, listo para publicar.
 fn export_pack_zip(base: &PathBuf, config: &InstanceConfig, filename: &str) -> Result<PathBuf, String> {
     use std::io::Write;
@@ -913,11 +948,14 @@ pub async fn publish_catalog(
 ) -> Result<String, String> {
     use crate::minecraft::launcher::{CATALOG_ASSET_NAME, mods_pack_url_for};
 
-    let (base, token) = {
+    let (base, token, sb_url, sb_anon, sb_service) = {
         let state_lock = state.lock().map_err(|e| e.to_string())?;
         (
             state_lock.config.instances_dir.clone(),
             state_lock.config.github_token.clone(),
+            state_lock.config.supabase_url.clone(),
+            state_lock.config.supabase_anon_key.clone(),
+            state_lock.config.supabase_service_key.clone(),
         )
     };
     let token = token_or_err(&token)?;
@@ -968,14 +1006,21 @@ pub async fn publish_catalog(
         cfg.save(&base)?;
     }
 
-    // Catálogo con las oficiales recién guardadas.
+    // Catálogo con las oficiales recién guardadas (+ credenciales de
+    // tiempo real para que los usuarios se suscriban sin configurar nada).
     let fresh: Vec<InstanceConfig> = list_local_instances(&base)
         .into_iter()
         .filter(|c| c.official)
         .collect();
+    let realtime = if !sb_url.trim().is_empty() && !sb_anon.trim().is_empty() {
+        serde_json::json!({ "url": sb_url.trim(), "anonKey": sb_anon.trim() })
+    } else {
+        serde_json::Value::Null
+    };
     let catalog = serde_json::json!({
         "updatedAt": now_iso(),
         "instances": fresh,
+        "realtime": realtime,
     });
     let cat_dir = std::env::temp_dir().join("ltc-catalog");
     std::fs::create_dir_all(&cat_dir).map_err(|e| e.to_string())?;
@@ -995,6 +1040,12 @@ pub async fn publish_catalog(
     )
     .await?;
 
+    // Campanada en tiempo real (si hay Supabase configurado): los launchers
+    // conectados recargan el catálogo al instante.
+    if !sb_url.trim().is_empty() && !sb_service.trim().is_empty() {
+        notify_realtime_bump(&sb_url, &sb_service).await?;
+    }
+
     Ok(format!(
         "Publicado: {} instancias oficiales y {} packs de mods. Ya les sale solo a todos.",
         fresh.len(),
@@ -1002,11 +1053,45 @@ pub async fn publish_catalog(
     ))
 }
 
+/// Avisa por Supabase de que hay catálogo nuevo (tabla catalog_state, id=1).
+async fn notify_realtime_bump(sb_url: &str, service_key: &str) -> Result<(), String> {
+    let url = format!(
+        "{}/rest/v1/catalog_state?on_conflict=id",
+        sb_url.trim_end_matches('/')
+    );
+    let client = gh_client()?;
+    let rev = chrono::Utc::now().timestamp_millis();
+    let resp = client
+        .post(&url)
+        .header("apikey", service_key.trim())
+        .header("Authorization", format!("Bearer {}", service_key.trim()))
+        .header("Content-Type", "application/json")
+        .header("Prefer", "resolution=merge-duplicates")
+        .json(&serde_json::json!({
+            "id": 1,
+            "rev": rev,
+            "updated_at": chrono::Utc::now().to_rfc3339(),
+        }))
+        .send()
+        .await
+        .map_err(|e| format!("Supabase no responde: {}", e))?;
+    if !resp.status().is_success() {
+        let txt: serde_json::Value = resp.json().await.unwrap_or_default();
+        return Err(format!(
+            "Supabase rechazó el aviso (revisa la tabla catalog_state y las políticas): {}",
+            txt.get("message").and_then(|m| m.as_str()).unwrap_or("")
+        ));
+    }
+    Ok(())
+}
+
 /// Sincroniza el catálogo oficial: crea o actualiza las instancias
 /// oficiales en este PC. Se ejecuta solo al abrir el launcher.
-/// Devuelve cuántas instancias cambiaron.
+/// Devuelve { changed, realtimeUrl, realtimeAnon } para suscribirse al push.
 #[tauri::command]
-pub async fn sync_catalog(state: State<'_, Mutex<InstanceState>>) -> Result<usize, String> {
+pub async fn sync_catalog(
+    state: State<'_, Mutex<InstanceState>>,
+) -> Result<serde_json::Value, String> {
     let base = {
         let inst_state = state.lock().map_err(|e| e.to_string())?;
         inst_state.config.instances_dir.clone()
@@ -1080,5 +1165,10 @@ pub async fn sync_catalog(state: State<'_, Mutex<InstanceState>>) -> Result<usiz
         }
     }
 
-    Ok(changed)
+    let rt = v.get("realtime");
+    Ok(serde_json::json!({
+        "changed": changed,
+        "realtimeUrl": rt.and_then(|r| r.get("url")).and_then(|u| u.as_str()).unwrap_or(""),
+        "realtimeAnon": rt.and_then(|r| r.get("anonKey")).and_then(|u| u.as_str()).unwrap_or(""),
+    }))
 }

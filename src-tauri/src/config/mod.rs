@@ -12,6 +12,13 @@ pub struct AppConfig {
     /// Token de GitHub del admin para publicar el pack de mods (no se muestra nunca).
     #[serde(default, rename = "githubToken")]
     pub github_token: String,
+    /// Supabase (tiempo real): URL y claves. La de servicio solo vive en el PC del admin.
+    #[serde(default, rename = "supabaseUrl")]
+    pub supabase_url: String,
+    #[serde(default, rename = "supabaseAnonKey")]
+    pub supabase_anon_key: String,
+    #[serde(default, rename = "supabaseServiceKey")]
+    pub supabase_service_key: String,
 }
 
 impl Default for AppConfig {
@@ -29,6 +36,9 @@ impl Default for AppConfig {
             update_url: "https://github.com/Haroldpgr/LTC/releases/latest/download/update.json"
                 .to_string(),
             github_token: String::new(),
+            supabase_url: String::new(),
+            supabase_anon_key: String::new(),
+            supabase_service_key: String::new(),
         }
     }
 }

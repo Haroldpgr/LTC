@@ -42,6 +42,8 @@ interface InstanceStore {
   publishModsPack: (instanceId: string) => Promise<string>;
   publishCatalog: () => Promise<string>;
   syncCatalog: () => Promise<number>;
+  onRealtimeCatalog: () => Promise<void>;
+  initRealtime: () => void;
 }
 
 export interface SavedAccount {
@@ -281,13 +283,44 @@ export const useInstanceStore = create<InstanceStore>((set, get) => {
     syncCatalog: async () => {
       // Catálogo oficial del servidor: las instancias publicadas por el
       // admin se crean/actualizan solas. Silencioso si no hay red o catálogo.
+      // Además deja lista la suscripción de tiempo real (Supabase).
       try {
-        const changed = await invoke<number>('sync_catalog');
-        if (changed > 0) await get().loadInstances();
-        return changed;
+        const res = await invoke<{ changed: number; realtimeUrl: string; realtimeAnon: string }>('sync_catalog');
+        if (res.changed > 0) await get().loadInstances();
+        if (res.realtimeUrl && res.realtimeAnon) {
+          try {
+            localStorage.setItem('ltc-realtime', JSON.stringify({ url: res.realtimeUrl, anon: res.realtimeAnon }));
+          } catch { /* noop */ }
+          const { ensureRealtime } = await import('@/lib/supabase');
+          ensureRealtime(res.realtimeUrl, res.realtimeAnon, () => get().onRealtimeCatalog());
+        }
+        return res.changed;
       } catch {
         return 0;
       }
+    },
+    onRealtimeCatalog: async () => {
+      // Llega push de Supabase: recargar catálogo + mods y avisar.
+      const changed = await get().syncCatalog();
+      await get().syncOfficialSources().catch(() => {});
+      if (changed > 0) {
+        set((state) => ({
+          launcherState: { ...state.launcherState, statusMessage: 'Contenido del servidor actualizado en tiempo real' },
+        }));
+      }
+    },
+    initRealtime: () => {
+      // Reconecta el push con las últimas credenciales conocidas.
+      try {
+        const raw = localStorage.getItem('ltc-realtime');
+        if (!raw) return;
+        const { url, anon } = JSON.parse(raw) as { url?: string; anon?: string };
+        if (url && anon) {
+          import('@/lib/supabase')
+            .then(({ ensureRealtime }) => ensureRealtime(url, anon, () => get().onRealtimeCatalog()))
+            .catch(() => {});
+        }
+      } catch { /* noop */ }
     },
   };
 });

@@ -75,6 +75,8 @@ pub fn run() {
             mods_source::sync_catalog,
             mods_source::set_github_token,
             mods_source::has_github_token,
+            mods_source::set_supabase_config,
+            mods_source::supabase_status,
             mods_source::publish_mods_pack,
             curseforge::search_modrinth,
             curseforge::get_modrinth_versions,
