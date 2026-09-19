@@ -93,11 +93,13 @@ async fn load_skin_bytes(url: &str) -> Result<Vec<u8>, String> {
 }
 
 /// Descarga CustomSkinLoader desde Modrinth si aún no está en mods.
+/// Si hay un CSL en cualquier forma (.jar, .disabled, .apagado, .duplicado)
+/// se respeta y no se toca: el usuario/admin lo gestiona.
 async fn ensure_csl_jar(mods_dir: &PathBuf, loader: &str, mc: &str) -> Result<(), String> {
     if let Ok(rd) = std::fs::read_dir(mods_dir) {
         for entry in rd.flatten() {
             let n = entry.file_name().to_string_lossy().to_lowercase();
-            if n.starts_with("customskinloader") && n.ends_with(".jar") {
+            if n.contains("customskinloader") {
                 return Ok(());
             }
         }
