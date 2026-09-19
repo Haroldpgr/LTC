@@ -1066,25 +1066,32 @@ pub async fn publish_catalog(
     )
     .await?;
 
-    // Campanada en tiempo real (si hay Supabase configurado): los launchers
-    // conectados recargan el catálogo al instante.
+    // Tiempo real y filas vivas: best-effort. Si Supabase falla, GitHub ya
+    // quedó publicado arriba; se avisa en el mensaje en vez de fallar todo.
+    let mut warnings: Vec<String> = Vec::new();
     if !sb_url.trim().is_empty() && !sb_service.trim().is_empty() {
-        notify_realtime_bump(&sb_url, &sb_service).await?;
+        if let Err(e) = notify_realtime_bump(&sb_url, &sb_service).await {
+            warnings.push(format!("Sin push instantáneo: {}", e));
+        }
+    }
+    if !sb_url.trim().is_empty() && !sb_service.trim().is_empty() {
+        if let Err(e) = push_supabase_rows(&sb_url, &sb_service, &fresh).await {
+            warnings.push(format!("Sin tablas vivas: {}", e));
+        } else if let Err(e) = prune_supabase_rows(&sb_url, &sb_service, &fresh).await {
+            warnings.push(format!("Sin poda: {}", e));
+        }
     }
 
-    // Filas vivas (instancias + estados): manda Supabase si hay service key.
-    if !sb_url.trim().is_empty() && !sb_service.trim().is_empty() {
-        push_supabase_rows(&sb_url, &sb_service, &fresh).await?;
-        // Podar filas de instancias que ya no son oficiales (borradas o
-        // desmarcadas): si no, seguirían apareciendo a los usuarios.
-        prune_supabase_rows(&sb_url, &sb_service, &fresh).await?;
-    }
-
-    Ok(format!(
+    let mut msg = format!(
         "Publicado: {} instancias oficiales y {} packs de mods. Ya les sale solo a todos.",
         fresh.len(),
         packs
-    ))
+    );
+    if !warnings.is_empty() {
+        msg.push_str("\nAvisos: ");
+        msg.push_str(&warnings.join(" | "));
+    }
+    Ok(msg)
 }
 
 /// Borra filas de instancias que ya no están en la lista oficial.
