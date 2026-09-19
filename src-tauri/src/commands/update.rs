@@ -84,52 +84,32 @@ pub async fn start_publish_release(
     // sin comillas ni saltos de línea (romperían las capas de citado).
     notes_arg = notes_arg.replace(['"', '\r', '\n'], " ");
 
-    // Ventana de consola nueva y separada: sobrevive aunque el launcher
-    // se reinicie a mitad del build. Sin pipes (no se puede colgar).
-    // Se intenta escapar del job de `tauri dev` (si lo hubiera) para que
-    // al reiniciar la app no arrastre a esta ventana; si falla, reintento normal.
-    #[cfg(target_os = "windows")]
-    fn spawn_window(ps1: &str, version: &str, notes: &str, root: &PathBuf) -> std::io::Result<()> {
-        use std::os::windows::process::CommandExt;
-        let attempt = |flags: u32| {
-            let mut cmd = std::process::Command::new("powershell");
-            cmd.args([
-                "-NoProfile",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-File",
-                ps1,
-                "-Version",
-                version,
-                "-Notes",
-                notes,
-            ]);
-            cmd.current_dir(root)
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null());
-            cmd.creation_flags(flags);
-            cmd.spawn().map(|_| ())
-        };
-        // BREAKAWAY_FROM_JOB | DETACHED | NEW_GROUP | NEW_CONSOLE
-        attempt(0x01000000 | 0x00000008 | 0x00000200 | 0x00000010)
-            .or_else(|_| attempt(0x00000010))
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    fn spawn_window(_ps1: &str, _version: &str, _notes: &str, _root: &PathBuf) -> std::io::Result<()> {
-        Err(std::io::Error::new(
-            std::io::ErrorKind::Unsupported,
-            "solo Windows",
-        ))
-    }
-
-    match spawn_window(
+    // Se lanza con `cmd /c start` para que la ventana quede REPARENTADA
+    // fuera del árbol de procesos del launcher: ni el reinicio de
+    // `tauri dev`, ni un tree-kill, ni el job de consola pueden arrastrarla.
+    // cmd termina al instante; la ventana vive por su cuenta.
+    let mut cmd = std::process::Command::new("cmd");
+    cmd.args([
+        "/c",
+        "start",
+        "LTC Release",
+        "powershell",
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
         &ps1.to_string_lossy().to_string(),
+        "-Version",
         &version,
+        "-Notes",
         &notes_arg,
-        &root,
-    ) {
+    ]);
+    cmd.current_dir(&root)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+
+    match cmd.spawn() {
         Ok(_) => {
             let _ = app_handle.emit(
                 "release-done",
