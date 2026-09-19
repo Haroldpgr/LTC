@@ -1,4 +1,4 @@
-use super::curseforge::ModrinthClient;
+use super::curseforge::{ModrinthClient, ModrinthVersion};
 use super::downloader::MinecraftDownloader;
 use super::launcher::InstanceConfig;
 use std::path::PathBuf;
@@ -111,13 +111,26 @@ async fn ensure_csl_jar(mods_dir: &PathBuf, loader: &str, mc: &str) -> Result<()
         .or(hits.hits.first())
         .ok_or_else(|| format!("CustomSkinLoader no disponible para {} {}.", loader, mc))?;
     let versions = ModrinthClient::get_versions(&proj.project_id, mc, loader).await?;
-    let ver = versions
+    // Solo estables (sin beta/alpha/rc): una pre-release rota tumba el arranque.
+    let stable: Vec<_> = versions
+        .iter()
+        .filter(|v| {
+            let n = v.version_number.to_lowercase();
+            !(n.contains("beta") || n.contains("alpha") || n.contains("-rc") || n.contains("snapshot"))
+        })
+        .collect();
+    let ver: &ModrinthVersion = stable
         .first()
+        .copied()
+        .or_else(|| versions.first())
         .ok_or_else(|| format!("Sin archivos de CustomSkinLoader para {} {}.", loader, mc))?;
+    // Preferir el jar específico del loader (forge/fabric) sobre el universal.
     let file = ver
         .files
         .iter()
-        .find(|f| f.primary)
+        .find(|f| f.primary && f.filename.to_lowercase().contains(loader))
+        .or_else(|| ver.files.iter().find(|f| f.filename.to_lowercase().contains(loader)))
+        .or_else(|| ver.files.iter().find(|f| f.primary))
         .or(ver.files.first())
         .ok_or("El archivo de CustomSkinLoader no trae descargas.")?;
     let dest = mods_dir.join(&file.filename);

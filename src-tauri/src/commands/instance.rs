@@ -287,6 +287,9 @@ pub async fn launch_instance(
     let java_path =
         Launcher::ensure_java(config.java_version, Some(&app_handle), &runtimes_dir).await?;
 
+    // Cuarentena de duplicados también en lanzamiento directo.
+    let _ = crate::minecraft::dedupe::quarantine_duplicate_mods(&instance_dir);
+
     // Version info efectiva (Forge usa su propio json, Fabric combina el vanilla)
     let version_info = resolve_version_info(
         &instance_dir,
@@ -401,6 +404,16 @@ pub async fn sync_and_launch(
         config.save(&inst_state.config.instances_dir)?;
         (config, instance_dir)
     };
+
+    // Cuarentena de duplicados (mismo modId, se queda el más nuevo).
+    // Causa típica del "código 1": no borra nada, renombra a .duplicado.
+    let dups = crate::minecraft::dedupe::quarantine_duplicate_mods(&instance_dir);
+    if !dups.is_empty() {
+        let _ = app_handle.emit(
+            "install-status",
+            serde_json::json!({ "message": format!("Mods duplicados desactivados: {}", dups.join(", ")) }),
+        );
+    }
 
     // Servidor pre-registrado en servers.dat (entrada directa + un clic)
     ensure_server_entry(
